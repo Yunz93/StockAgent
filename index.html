@@ -44,15 +44,19 @@
 
         <div class="sidebar-pool">
           <div class="sidebar-pool-heading">
-            <p>定投计划</p>
+            <p>指数分析</p>
             <span class="muted" id="sidebarPoolCount">0</span>
           </div>
-          <nav id="sidebarEtfList" class="sidebar-etf-list" aria-label="定投计划 ETF"></nav>
+          <nav id="sidebarEtfList" class="sidebar-etf-list" aria-label="指数分析 ETF"></nav>
         </div>
 
         <div class="sidebar-footer">
           <nav class="nav-stack nav-stack-footer" aria-label="工作区工具">
-            <button class="nav-item active" data-view="etf" type="button" title="定投计划管理">
+            <button class="nav-item active" data-view="home" type="button" title="今日执行">
+              <span class="icon" aria-hidden="true">◎</span>
+              <span class="nav-label">今日执行</span>
+            </button>
+            <button class="nav-item" data-view="etf" type="button" title="定投计划管理">
               <span class="icon" aria-hidden="true">▣</span>
               <span class="nav-label">定投计划</span>
             </button>
@@ -95,53 +99,62 @@
             >
               <span aria-hidden="true">☰</span>
             </button>
-            <div>
+            <div class="topbar-title-block">
               <h1 id="pageTitle">ETF Agent</h1>
+              <p id="pageSubtitle" class="page-subtitle" hidden>
+                <span id="pageSubtitleText"></span>
+              </p>
               <div class="session-strip" aria-label="数据状态摘要">
                 <span><i class="status-dot"></i><strong id="topSourceStatus">行情连接中</strong></span>
               </div>
             </div>
           </div>
           <div class="topbar-actions">
-            <button id="etfRefresh" class="ghost-button compact" type="button">刷新行情</button>
-            <button id="themeToggle" class="theme-toggle ghost-button compact" type="button" aria-label="切换到暗黑模式">
-              <span class="theme-icon" aria-hidden="true">☾</span>
+            <button
+              id="etfRefresh"
+              class="icon-button ghost-button compact"
+              type="button"
+              aria-label="刷新行情"
+              title="刷新行情"
+            >
+              <span class="action-icon" aria-hidden="true">↻</span>
+            </button>
+            <button id="themeToggle" class="theme-toggle ghost-button compact" type="button" aria-label="切换到暗黑模式" title="切换外观">
+              <svg class="theme-icon theme-icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M21 14.5A8.5 8.5 0 0 1 9.5 3 7 7 0 1 0 21 14.5Z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <svg class="theme-icon theme-icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="12" cy="12" r="3.5" stroke="currentColor" stroke-width="1.75"/>
+                <path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+              </svg>
             </button>
           </div>
         </header>
 
-        <section id="dividendView" class="view">
-          <div class="panel-heading dividend-heading">
-            <div>
-              <h2 class="section-title" id="dividendSectionTitle">指数</h2>
-              <p class="muted dividend-lede" id="dividendLede" hidden></p>
-            </div>
+        <section id="homeView" class="view active">
+          <div id="homeEmptyGuide" class="seed-guide-card" hidden>
+            <h3>计划为空</h3>
+            <p class="muted">先导入种子池或到定投计划添加 ETF，再生成今日执行清单。</p>
+            <button class="primary-button" type="button" data-import-seed-pool>导入默认种子池</button>
           </div>
-          <div id="dividendStatus" class="research-load-status muted" role="status">正在准备分析数据</div>
+          <div id="poolAllocPanel" class="pool-alloc-home"></div>
+          <div id="execDraftPanel" class="exec-draft-panel" hidden></div>
+        </section>
+
+        <section id="dividendView" class="view">
+          <div id="dividendStatus" class="research-load-status muted" role="status" hidden></div>
           <div id="dividendContent" class="dividend-content" hidden></div>
         </section>
 
-        <section id="etfView" class="view active">
+        <section id="etfView" class="view">
           <div class="etf-tabs" role="tablist" aria-label="定投计划模块">
             <button
-              id="etfTabOverview"
+              id="etfTabPlan"
               class="etf-tab active"
               type="button"
               role="tab"
               aria-selected="true"
-              aria-controls="etfPanelOverview"
-              data-etf-tab="overview"
-            >
-              概览
-            </button>
-            <button
-              id="etfTabPlan"
-              class="etf-tab"
-              type="button"
-              role="tab"
-              aria-selected="false"
               aria-controls="etfPanelPlan"
-              tabindex="-1"
               data-etf-tab="plan"
             >
               计划设置
@@ -173,27 +186,11 @@
           </div>
 
           <div
-            id="etfPanelOverview"
-            class="etf-tab-panel"
-            role="tabpanel"
-            aria-labelledby="etfTabOverview"
-            data-etf-panel="overview"
-          >
-            <div id="overviewEmptyGuide" class="seed-guide-card" hidden>
-              <h3>计划为空</h3>
-              <button class="primary-button" type="button" data-import-seed-pool>导入默认种子池</button>
-            </div>
-            <div id="poolAllocPanel" class="pool-alloc-home"></div>
-            <p id="etfMetrics" class="overview-glance muted" aria-label="组合摘要"></p>
-          </div>
-
-          <div
             id="etfPanelPlan"
             class="etf-tab-panel"
             role="tabpanel"
             aria-labelledby="etfTabPlan"
             data-etf-panel="plan"
-            hidden
           >
             <section class="plan-section" aria-label="计划参数">
               <div class="plan-section-heading">
@@ -373,7 +370,6 @@
               <button class="primary-button" type="submit">加入计划</button>
               <p id="etfFormStatus" class="muted" role="status"></p>
             </form>
-            <p id="etfQuoteStatus" class="research-load-status muted" role="status">加载行情…</p>
             <div class="table-wrap etf-table-wrap">
               <table class="stock-table etf-table">
                 <thead>
@@ -384,9 +380,9 @@
                     <th class="num">涨跌</th>
                     <th class="num etf-col-target" title="池内目标权重">配置%</th>
                     <th class="etf-col-strategy" title="覆盖全局策略">策略</th>
-                    <th class="num etf-col-pool" title="占池内市值">池内%</th>
+                    <th class="num etf-col-pool" title="占池内市值">池内</th>
                     <th class="num etf-col-asset" title="占可投资总资金">总仓%</th>
-                    <th class="num" title="池内% − 配置%">偏离%</th>
+                    <th class="num" title="池内 − 配置">偏离</th>
                     <th class="num">持有份额</th>
                     <th class="num">含费成本</th>
                     <th class="num">市值</th>
@@ -436,7 +432,6 @@
             <div class="plan-section-heading">
               <h3 class="plan-section-title">交易记录</h3>
             </div>
-            <div id="execDraftPanel" class="exec-draft-panel" hidden></div>
             <form id="buyForm" class="add-symbol-strip" autocomplete="off">
               <label>
                 <span>类型</span>

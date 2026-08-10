@@ -152,10 +152,14 @@ test("period advice exposes multiplier breakdown when overlays apply", () => {
       A: { score: 30, zone: "fear", ok: true },
     },
   });
-  assert.match(advice.bullets[0], /倍率拆解/);
-  assert.match(advice.bullets[0], /策略/);
-  assert.match(advice.bullets[0], /情绪/);
-  assert.match(advice.bullets[0], /=/);
+  assert.match(advice.bullets[0], /倍率拆解：/);
+  assert.match(advice.bullets[0], /策略 1\.5×（低估区）/);
+  assert.match(advice.bullets[0], /情绪 1\.2×/);
+  assert.match(advice.bullets[0], /= 1\.8×/);
+  assert.equal(advice.multBreakdown?.factors?.length, 2);
+  assert.equal(advice.multBreakdown.factors[0].role, "策略");
+  assert.equal(advice.multBreakdown.factors[1].role, "情绪");
+  assert.equal(advice.multBreakdown.result, "1.8×");
 });
 
 test("period advice asks for budget before inventing amounts", () => {

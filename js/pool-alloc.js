@@ -2,7 +2,7 @@ import { PLAN_CADENCE_LABELS } from "./constants.js";
 import { appConfig, state } from "./state.js";
 import { escapeAttr, escapeHtml, money, resolveEtfDisplayName } from "./utils.js";
 import { allocatePoolBudget, strategyLabel } from "./strategy.js";
-import { planExecutionContext, planPeriod } from "./decision-support.js";
+import { planExecutionContext } from "./decision-support.js";
 import {
   analysisCacheKey,
   analysisPrefetchIsPreliminary,
@@ -168,26 +168,6 @@ function progressNoteHtml(holdings) {
   return "";
 }
 
-/** 轻量读取本期草稿摘要，避免与 execution-drafts 循环依赖。 */
-function draftSummaryFromState() {
-  const period = planPeriod(state.plan || {}).start;
-  const drafts = (Array.isArray(state.executionDrafts) ? state.executionDrafts : []).filter(
-    (item) => item && item.period === period,
-  );
-  const suggested = drafts.reduce((sum, item) => sum + (Number(item.suggested_amount) || 0), 0);
-  const executed = drafts
-    .filter((item) => item.status === "confirmed")
-    .reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.shares) || 0), 0);
-  const pending = drafts.filter((item) => item.status === "pending").length;
-  return {
-    drafts,
-    suggested: Math.round(suggested * 100) / 100,
-    executed: Math.round(executed * 100) / 100,
-    pending,
-    total: drafts.length,
-  };
-}
-
 export function poolAllocationHtml({ highlightSymbol = null, clickable = true } = {}) {
   const plan = state.plan || {};
   const cadenceLabel = PLAN_CADENCE_LABELS[plan.cadence] || "每月";
@@ -256,42 +236,58 @@ export function poolAllocationHtml({ highlightSymbol = null, clickable = true } 
   const progressNote = progressNoteHtml(holdings);
   const prelimClass = preliminary ? " is-preliminary" : "";
   const prelimTag = preliminary ? `<em class="pool-alloc-prelim-tag">初步</em>` : "";
-  const draftSummary = draftSummaryFromState();
-  let draftStatus = "";
-  if (draftSummary.pending > 0) {
-    draftStatus = `
-      <div class="pool-alloc-exec-bar" role="status">
-        <span>待确认 ${draftSummary.pending} 笔</span>
-        <button class="primary-button compact" type="button" data-open-buys>去执行</button>
-      </div>`;
-  } else if (draftSummary.executed > 0) {
-    draftStatus = `<p class="muted pool-alloc-exec-summary">已执行 ${money(draftSummary.executed)}</p>`;
-  }
 
+  const buildProgress =
+    execution.phase === "initial"
+      ? (() => {
+          const target = Math.max(0, Number(execution.targetAmount) || 0);
+          const current = Math.max(0, Number(execution.currentValue) || 0);
+          const gap = Math.max(0, Number(execution.initialGap) || 0);
+          const pct = target > 0 ? Math.min(100, Math.round((current / target) * 1000) / 10) : 0;
+          const pctLabel = Number.isInteger(pct) ? String(pct) : pct.toFixed(1);
+          return `
+          <div
+            class="pool-alloc-build-progress"
+            role="progressbar"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="${pct}"
+            aria-label="初期建仓进度 ${pctLabel}%"
+          >
+            <div class="pool-alloc-build-progress-meta">
+              <span>${escapeHtml(execution.phaseLabel)}</span>
+              <span>${pctLabel}% · 尚缺 ${money(gap)}</span>
+            </div>
+            <div class="pool-alloc-build-progress-track">
+              <div class="pool-alloc-build-progress-fill" style="width:${pct}%"></div>
+            </div>
+          </div>`;
+        })()
+      : "";
   const phaseLine =
     execution.phase === "initial"
-      ? `${execution.phaseLabel} · 本期 ${money(execution.budget)} · 尚缺 ${money(execution.initialGap)}`
-      : `${execution.phaseLabel} · ${strategyName} · ${escapeHtml(cadenceLabel)}${escapeHtml(String(dayLabel))}`;
+      ? ""
+      : `<p class="muted">${execution.phaseLabel} · ${strategyName} · ${escapeHtml(cadenceLabel)}${escapeHtml(String(dayLabel))}</p>`;
 
   return `
     <section class="panel-block pool-alloc-block" aria-label="本期分配">
       <div class="panel-heading">
-        <div>
+        <div class="pool-alloc-heading-copy">
           <h2 class="section-title">本期分配</h2>
-          <p class="muted">${phaseLine}</p>
+          ${phaseLine}
         </div>
         <div class="pool-alloc-heading-actions">
           <button class="ghost-button compact" type="button" data-ai-portfolio-review>AI 审视</button>
           <button class="primary-button compact" type="button" data-generate-exec-drafts>生成清单</button>
         </div>
       </div>
+      ${buildProgress}
       <div class="pool-alloc-summary${prelimClass}">
         <div class="pool-alloc-metric"><span>${execution.phase === "initial" ? "建仓缺口" : "本期预算"}</span><strong>${money(pool.budget)}</strong></div>
         <div class="pool-alloc-metric"><span>建议部署${prelimTag}</span><strong>${money(pool.deployTotal)}</strong></div>
         <div class="pool-alloc-metric"><span>留现金</span><strong>${money(pool.cashKeep)}</strong></div>
         <div class="pool-alloc-metric"><span>现金池</span><strong>${money(cashBalance)}</strong></div>
       </div>
-      ${draftStatus}
       <div class="dca-alloc-table" aria-label="各品种建议金额">
         <div class="dca-alloc-head"><span>品种</span><span>状态</span><span class="num">金额</span></div>
         ${rows

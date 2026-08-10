@@ -165,13 +165,43 @@ export function getPeriodAdvice({
       ? Number(grid.macroMult)
       : null;
   const sentPart = sentAllowed ? Number(sent.mult) || 1 : null;
-  const formulaParts = [`策略${formatAdviceMult(strategyBase)}（${grid.band || "—"}）`];
-  if (macroPart != null) formulaParts.push(`宏观${formatAdviceMult(macroPart)}`);
-  if (sentPart != null) formulaParts.push(`情绪${formatAdviceMult(sentPart)}`);
-  const bullets =
-    formulaParts.length > 1
-      ? [`倍率拆解 ${formulaParts.join(" × ")} = ${formatAdviceMult(effectiveMult)}`]
-      : [`定投倍率 ${formatAdviceMult(effectiveMult)}`];
+  const multFactors = [
+    {
+      role: "策略",
+      multText: formatAdviceMult(strategyBase),
+      note: grid.band || "—",
+    },
+  ];
+  if (macroPart != null) {
+    multFactors.push({
+      role: "宏观",
+      multText: formatAdviceMult(macroPart),
+      note: null,
+    });
+  }
+  if (sentPart != null) {
+    multFactors.push({
+      role: "情绪",
+      multText: formatAdviceMult(sentPart),
+      note: null,
+    });
+  }
+  const formatFactorPlain = (factor) => {
+    const core = `${factor.role} ${factor.multText}`;
+    return factor.note ? `${core}（${factor.note}）` : core;
+  };
+  const multBreakdown =
+    multFactors.length > 1
+      ? {
+          factors: multFactors,
+          result: formatAdviceMult(effectiveMult),
+        }
+      : null;
+  const bullets = multBreakdown
+    ? [
+        `倍率拆解：${multBreakdown.factors.map(formatFactorPlain).join(" × ")} = ${multBreakdown.result}`,
+      ]
+    : [`定投倍率 ${formatAdviceMult(effectiveMult)}`];
   if (holding?.assetClass === "commodity" || grid.macroMult != null) {
     const macroMult = grid.macroMult;
     const macroBand = grid.goldMacro?.band || macro?.band;
@@ -262,6 +292,7 @@ export function getPeriodAdvice({
     mine,
     skipped,
     bullets,
+    multBreakdown,
     position,
     canAdd: stance === STANCE.INVEST,
   };

@@ -3,6 +3,7 @@ export const CURRENCY = {
 };
 
 export const PAGE_TITLES = {
+  home: "今日执行",
   dividend: "分析",
   etf: "定投计划",
   settings: "设置",

@@ -1017,7 +1017,7 @@ def review_portfolio(request_payload, force=False):
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "usage": usage,
         "cached": False,
-        "disclaimer": "AI 全池审视仅供研究参考，不构成投资建议；不会自动改草稿或下单。",
+        "disclaimer": "AI 全池审视仅供研究参考，不构成投资建议。",
     }
     cache_seconds = int(settings.get("cache_minutes", 30)) * 60
     if cache_seconds:

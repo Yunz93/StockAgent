@@ -3,7 +3,7 @@
  */
 
 import { appConfig, state } from "./state.js";
-import { escapeHtml, money } from "./utils.js";
+import { aiProviderLabel, escapeHtml, money } from "./utils.js";
 
 /** 从全池分配结果组装后端 baseline。 */
 export function buildPortfolioReviewBaseline(pool, strategy = "valuation") {
@@ -85,7 +85,6 @@ export function portfolioReviewResultHtml(review) {
   if (!result) return "";
   const proposal = result.ai_proposal || {};
   const changed = (result.final_allocations || []).filter((row) => row.changed);
-  const focus = proposal.focus_title || "组合层矛盾";
   // 摘要已承载主结论；旁路只补新信息（分节、修正明细、观察、限制）
   const adjustmentsHtml = changed.length
     ? `<div class="ai-portfolio-adjustments" aria-label="建议修正">
@@ -103,14 +102,10 @@ export function portfolioReviewResultHtml(review) {
       <div class="panel-heading">
         <div>
           <h3 class="section-title">AI 全池审视</h3>
-          <p class="muted">${escapeHtml(result.provider || "")} · ${escapeHtml(result.model || "")}${
+          <p class="muted">${escapeHtml(aiProviderLabel(result.provider))} · ${escapeHtml(result.model || "")}${
             result.cached ? " · 缓存" : ""
           }</p>
         </div>
-        <button class="ghost-button compact" type="button" data-ai-portfolio-review data-force="true">重新审视</button>
-      </div>
-      <div class="ai-review-focus">
-        <strong>${escapeHtml(focus)}</strong>
       </div>
       <p class="ai-review-headline">${escapeHtml(proposal.summary || "模型未提供摘要")}</p>
       ${sectionsHtml(proposal)}

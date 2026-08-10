@@ -230,7 +230,9 @@ async function refreshQuotes(force = false) {
   if (!force && fresh && Object.keys(state.quotesBySymbol).length) return;
   if (quotesPromise) return quotesPromise;
   quotesPromise = (async () => {
+    const publishStatus = () => state.activeView !== "dividend";
     try {
+      if (publishStatus()) setSourceStatus("加载行情…", "connecting");
       const response = await fetch(`/api/etf/quotes?symbols=${encodeURIComponent(symbols.join(","))}`);
       const payload = await response.json();
       state.quotesMeta = payload;
@@ -258,15 +260,16 @@ async function refreshQuotes(force = false) {
         });
         if (renamed) persistWorkspace();
       }
-      setSourceStatus(payload.error ? `行情不可用：${payload.error}` : payload.provider || "行情已连接", payload.error ? "error" : "connected");
-      if (els.etfQuoteStatus) {
-        els.etfQuoteStatus.textContent = payload.error
-          ? `行情不可用：${payload.error}`
-          : `${payload.provider || ""} · 更新于 ${payload.updated_at || "—"}${payload.warning ? ` · ${payload.warning}` : ""}`;
+      if (publishStatus()) {
+        setSourceStatus(
+          payload.error
+            ? `行情不可用：${payload.error}`
+            : `数据更新于 ${payload.updated_at || "—"}${payload.warning ? ` · ${payload.warning}` : ""}`,
+          payload.error ? "error" : "connected",
+        );
       }
     } catch (error) {
-      setSourceStatus(`行情不可用：${error}`, "error");
-      if (els.etfQuoteStatus) els.etfQuoteStatus.textContent = `行情不可用：${error}`;
+      if (publishStatus()) setSourceStatus(`行情不可用：${error}`, "error");
     } finally {
       quotesPromise = null;
     }
@@ -622,10 +625,8 @@ function renderRows() {
           </td>
           <td class="num etf-col-pool" title="占池内市值">${poolWeight != null ? `${poolWeight.toFixed(1)}%` : "—"}</td>
           <td class="num etf-col-asset" title="占可投资总资金">${assetWeight != null ? `${assetWeight.toFixed(1)}%` : "—"}</td>
-          <td class="num ${driftClass}" title="池内% − 配置%">${
-            drift != null
-              ? `${signed(drift, 1)}<br /><small>${drift > 0.05 ? "超配" : drift < -0.05 ? "低配" : "贴近"}</small>`
-              : "—"
+          <td class="num ${driftClass}" title="池内 − 配置">${
+            drift != null ? `${signed(drift, 1)}%` : "—"
           }</td>
           <td class="num etf-input-cell">
             <input type="number" min="0" step="any" value="${holdingInputValue(entry.shares)}" placeholder="0" data-field="shares" data-symbol="${escapeAttr(entry.symbol)}" aria-label="持有份额" />
@@ -809,8 +810,16 @@ export async function addEtf(rawSymbol, shares, cost, targetWeight) {
 }
 
 function activateBuysTab() {
+  callRenderer("switchView", "etf");
   const tab = document.querySelector('[data-etf-tab="buys"]');
   if (tab) tab.click();
+}
+
+function activateHomeExec() {
+  callRenderer("switchView", "home");
+  queueMicrotask(() => {
+    els.execDraftPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 }
 
 async function requestPortfolioAiReview({ force = false } = {}) {
@@ -860,9 +869,7 @@ function bindDraftActions(root) {
       renderExecDraftPanel();
       const summary = executionDraftSummary();
       if (summary.pending > 0) {
-        // 清单统一在「交易记录」页处理，生成后直接带过去
-        activateBuysTab();
-        els.execDraftPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+        activateHomeExec();
       } else if (els.poolAllocPanel) {
         const note = document.createElement("p");
         note.className = "muted pool-alloc-note";
@@ -874,12 +881,6 @@ function bindDraftActions(root) {
   root.querySelectorAll("[data-ai-portfolio-review]").forEach((button) => {
     button.addEventListener("click", () => {
       requestPortfolioAiReview({ force: button.dataset.force === "true" });
-    });
-  });
-  root.querySelectorAll("[data-open-buys]").forEach((button) => {
-    button.addEventListener("click", () => {
-      activateBuysTab();
-      els.execDraftPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
   root.querySelectorAll("[data-draft-confirm]").forEach((button) => {
@@ -999,7 +1000,7 @@ function renderPoolAllocation() {
   renderSidebarEtfs();
   ensurePoolAnalysisPrefetch({
     onUpdate: () => {
-      if (!els.poolAllocPanel || state.activeView !== "etf") return;
+      if (!els.poolAllocPanel || (state.activeView !== "etf" && state.activeView !== "home")) return;
       els.poolAllocPanel.innerHTML = poolAllocationHtml({ clickable: true });
       els.poolAllocPanel.querySelectorAll("[data-analyze]").forEach((button) => {
         button.addEventListener("click", () => openAnalysis(button.dataset.analyze));

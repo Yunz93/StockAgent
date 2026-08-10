@@ -14,6 +14,17 @@ export function escapeHtml(value) {
     .replace(/>/g, "&gt;");
 }
 
+const AI_PROVIDER_LABELS = {
+  deepseek: "DeepSeek",
+  openai: "OpenAI",
+};
+
+/** 设置页同款品牌写法：deepseek → DeepSeek。 */
+export function aiProviderLabel(provider) {
+  const id = String(provider || "").trim().toLowerCase();
+  return AI_PROVIDER_LABELS[id] || String(provider || "").trim();
+}
+
 export function money(value, currency = "CNY", digits = 2) {
   if (value == null || Number.isNaN(Number(value))) return "—";
   const fractionDigits = Number.isFinite(Number(digits)) ? Math.max(0, Math.min(8, Number(digits))) : 2;

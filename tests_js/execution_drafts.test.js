@@ -7,6 +7,7 @@ import {
   bookCashReserveSell,
   buildExecutionDraftsFromAllocation,
   executionDraftSummary,
+  sellSuggestionForSymbol,
   settleCashReserveOnPeriodComplete,
   updateExecutionDraft,
 } from "../js/execution-drafts.js";
@@ -139,6 +140,62 @@ test("buildExecutionDraftsFromAllocation includes sell-side drafts when overweig
   assert.equal(sell.id, "draft_2026-07-01_512890_sell");
   assert.ok(sell.shares >= 100);
   assert.match(sell.note, /止盈|高出目标/);
+});
+
+test("sellSuggestionForSymbol mirrors checklist sell advice for the ETF detail", () => {
+  state.etfs = [
+    { symbol: "512890", name: "红利低波ETF", shares: 40000, target_weight: 20, cost: 1 },
+    { symbol: "510300", name: "沪深300ETF", shares: 15000, target_weight: 80, cost: 4 },
+  ];
+  state.quotesBySymbol = {
+    "512890": { price: 1.0 },
+    "510300": { price: 4.0 },
+  };
+  state.analysisCache = {
+    "512890": {
+      supported: true,
+      valuation: { pe_percentile_10y: 0.92 },
+      score: { grade: "E" },
+      asset_class: "dividend",
+    },
+    "510300": {
+      supported: true,
+      valuation: { pe_percentile_10y: 0.4 },
+      score: { grade: "C" },
+      asset_class: "equity_core",
+    },
+  };
+  state.plan = {
+    amount: 2000,
+    capital_base: 0,
+    initial_target_pct: 0,
+    cadence: "monthly",
+    day: 1,
+    strategy: "fixed",
+    trading_cost: {
+      min_commission: 5,
+      commission_rate_pct: 0.03,
+      max_fee_ratio_pct: 0.25,
+      lot_size: 100,
+    },
+    pending_orders: {},
+  };
+  state.executionDrafts = buildExecutionDraftsFromAllocation({
+    now: new Date("2026-07-15T10:00:00"),
+  });
+  const advice = sellSuggestionForSymbol("512890", {
+    now: new Date("2026-07-15T10:00:00"),
+  });
+  assert.ok(advice);
+  assert.equal(advice.side, "sell");
+  assert.equal(advice.band, "估值止盈");
+  assert.ok(advice.shares >= 100);
+  assert.equal(advice.draftStatus, "pending");
+  assert.equal(advice.draftId, "draft_2026-07-01_512890_sell");
+  assert.equal(
+    sellSuggestionForSymbol("510300", { now: new Date("2026-07-15T10:00:00") }),
+    null,
+  );
 });
 
 test("updateExecutionDraft preserves confirmed rows when regenerating", () => {
