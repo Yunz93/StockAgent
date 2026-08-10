@@ -205,6 +205,12 @@ class Handler(BaseHTTPRequestHandler):
                     )
                 )
                 return
+            if parsed.path == "/api/strategy/backtest":
+                from .portfolio_backtest import run_backtest_from_workspace_symbols
+
+                status, body = run_backtest_from_workspace_symbols(payload)
+                self.send_json(body, status=status)
+                return
             self.send_error(404)
         except AIProviderError as exc:
             self.send_json(

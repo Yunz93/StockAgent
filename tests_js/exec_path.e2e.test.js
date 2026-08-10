@@ -11,8 +11,16 @@ function seedPlanState() {
     { symbol: "510300", name: "沪深300ETF", shares: 0, cost: 0, target_weight: 40 },
   ];
   state.quotesBySymbol = {
-    "512890": { price: 1.0 },
-    "510300": { price: 4.0 },
+    "512890": {
+      price: 1.0,
+      market_timestamp: "2026-07-15T10:00:00.000Z",
+      product_quality: { premium_discount_pct: 0.1, bid_ask_spread_pct: 0.05 },
+    },
+    "510300": {
+      price: 4.0,
+      market_timestamp: "2026-07-15T10:00:00.000Z",
+      product_quality: { premium_discount_pct: 0.1, bid_ask_spread_pct: 0.05 },
+    },
   };
   state.analysisCache = {
     "512890": {
@@ -68,7 +76,9 @@ test("E2E: generate drafts → confirm → holdings shares/cost update", () => {
   const drafts = buildExecutionDraftsFromAllocation({ now });
   state.executionDrafts = drafts;
 
-  const pendingBuys = drafts.filter((item) => item.status === "pending" && item.side !== "sell");
+  const pendingBuys = drafts.filter(
+    (item) => item.status === "pending" && item.side !== "sell" && Number(item.shares) > 0,
+  );
   assert.ok(pendingBuys.length >= 1, "should create at least one buy draft");
 
   const draft = pendingBuys[0];

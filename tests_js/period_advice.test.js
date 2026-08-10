@@ -197,7 +197,7 @@ test("period advice uses initial build gap instead of recurring budget", () => {
   assert.match(advice.headline, /建议投入/);
 });
 
-test("period advice uses monthly installment during multi-month initial build", () => {
+test("period advice uses remaining-gap installment during multi-month initial build", () => {
   const advice = getPeriodAdvice({
     symbol: "512890",
     plan: {
@@ -218,6 +218,7 @@ test("period advice uses monthly installment during multi-month initial build", 
     ],
   });
   assert.equal(advice.execution.phase, "initial");
-  assert.equal(advice.pool.budget, 5000);
-  assert.equal(advice.amount, 5000);
+  assert.equal(advice.execution.budget, 3333.33);
+  assert.equal(advice.pool.budget, 3333);
+  assert.equal(advice.amount, 3333);
 });

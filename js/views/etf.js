@@ -12,21 +12,40 @@ import {
 import { drawPriceChart, buyEventMarkers, sellEventMarkers } from "../chart.js";
 import { setSourceStatus } from "../navigation.js";
 import { persistWorkspace } from "../workspace.js";
-import { currentPoolAllocationResult, poolAllocationHtml } from "../pool-alloc.js";
+import { currentPoolAllocationResult } from "../pool-alloc.js";
 import {
   buildPortfolioReviewBaseline,
   isPortfolioAiReady,
+  portfolioReviewResultHtml,
 } from "../ai-portfolio.js";
 import { ensurePoolAnalysisPrefetch } from "../analysis-cache.js";
 import {
-  buildExecutionDraftsFromAllocation,
+  appendDecisionHistory,
   executionDraftSummary,
+  reevaluatePeriodStrategy,
   settleCashReserveOnPeriodComplete,
+  syncExecutionDraftsFromAllocation,
   updateExecutionDraft,
 } from "../execution-drafts.js";
-import { normalizeTradingCost, upsertBuy, upsertSell } from "../workspace_model.js";
+import {
+  canSubmitWithOverride,
+  evaluateExecutionPolicy,
+  parseQuoteTimestampMs,
+  policyStatusLabel,
+} from "../execution-policy.js";
+import {
+  normalizeTradingCost,
+  upsertBuy,
+  upsertSell,
+} from "../workspace_model.js";
 import { ADD_PLAN_PRESETS, normalizeAddPlanConfig } from "../add-plan.js";
-import { estimatedTradeFee, holdingFromTrades, planExecutionContext } from "../decision-support.js";
+import {
+  estimatedTradeFee,
+  holdingFromTrades,
+  planExecutionContext,
+  stampInitialBuildStarted,
+} from "../decision-support.js";
+import { confirmDraftIntoLedger, settlePlanAfterDrafts } from "../trade-apply.js";
 import { callRenderer, openAnalysis, registerRenderers } from "./render.js";
 import {
   DEFAULT_STRATEGY_CONFIG,
@@ -36,7 +55,6 @@ import {
   strategySummary,
 } from "../strategy.js";
 import { entryMetrics, overviewGlanceLine, portfolioTotals } from "../etf-portfolio.js";
-import { confirmDraftIntoLedger, settlePlanAfterDrafts } from "../trade-apply.js";
 
 const ROW_STRATEGY_OPTIONS = Object.freeze([
   { value: "", label: "跟随全局" },
@@ -264,7 +282,7 @@ async function refreshQuotes(force = false) {
         setSourceStatus(
           payload.error
             ? `行情不可用：${payload.error}`
-            : `数据更新于 ${payload.updated_at || "—"}${payload.warning ? ` · ${payload.warning}` : ""}`,
+            : `行情拉取于 ${payload.updated_at || "—"}${payload.warning ? ` · ${payload.warning}` : ""}`,
           payload.error ? "error" : "connected",
         );
       }
@@ -489,18 +507,46 @@ function renderInitialSummary() {
   if (!els.planInitialSummary) return;
   const execution = planExecutionContext({ plan: state.plan, holdings: currentPlanHoldings() });
   if (!execution.configured) {
-    els.planInitialSummary.textContent = "";
+    els.planInitialSummary.hidden = true;
+    els.planInitialSummary.innerHTML = "";
     return;
   }
   if (execution.markedComplete || execution.reached) {
-    els.planInitialSummary.textContent =
-      `目标 ${money(execution.targetAmount)} · 当前 ${money(execution.currentValue)} · 已完成`;
+    els.planInitialSummary.hidden = false;
+    els.planInitialSummary.innerHTML = `<p class="muted plan-initial-progress-note">目标 ${money(
+      execution.targetAmount,
+    )} · 当前 ${money(execution.currentValue)} · 已完成</p>`;
     return;
   }
-  els.planInitialSummary.textContent =
-    `目标 ${money(execution.targetAmount)} · 分 ${execution.initialMonths} 个月` +
-    ` · 每月约 ${money(execution.monthlyInstallment)} · 尚缺 ${money(execution.initialGap)}` +
-    ` · 本期 ${money(execution.budget)}`;
+  const target = Math.max(0, Number(execution.targetAmount) || 0);
+  const current = Math.max(0, Number(execution.currentValue) || 0);
+  const gap = Math.max(0, Number(execution.initialGap) || 0);
+  const installment = Math.max(0, Number(execution.periodInstallment) || 0);
+  const monthsLeft = Math.max(1, Number(execution.remainingMonths) || 1);
+  const pct = target > 0 ? Math.min(100, Math.round((current / target) * 1000) / 10) : 0;
+  const pctLabel = Number.isInteger(pct) ? String(pct) : pct.toFixed(1);
+  els.planInitialSummary.hidden = false;
+  els.planInitialSummary.innerHTML = `
+    <div
+      class="plan-initial-progress-bar"
+      role="progressbar"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow="${pct}"
+      aria-label="初期建仓进度 ${pctLabel}%"
+    >
+      <div class="plan-initial-progress-meta">
+        <span>${escapeHtml(execution.phaseLabel)} ${pctLabel}%</span>
+        <span>已建 ${money(current)} / 目标 ${money(target)}</span>
+      </div>
+      <div class="plan-initial-progress-track">
+        <div class="plan-initial-progress-fill" style="width:${pct}%"></div>
+      </div>
+      <p class="muted plan-initial-progress-note">
+        尚缺 ${money(gap)} · 剩余 ${monthsLeft} 个月 · 本期预算按尚缺÷剩余月数 ≈ ${money(installment)}
+      </p>
+    </div>
+  `;
 }
 
 export function readPlanFormIntoState() {
@@ -534,6 +580,7 @@ export function readPlanFormIntoState() {
         ? Math.min(100, initialTargetPct)
         : 0,
     initial_months: initialMonths,
+    initial_build_started_at: state.plan.initial_build_started_at || null,
     initial_build_completed_at: els.planInitialCompleted?.checked
       ? state.plan.initial_build_completed_at || new Date().toISOString()
       : null,
@@ -551,7 +598,10 @@ export function readPlanFormIntoState() {
       lot_size: els.planLotSize?.value,
     }),
     pending_orders: state.plan.pending_orders || {},
+    cash_reserve: state.plan.cash_reserve,
   };
+  const stamped = stampInitialBuildStarted(state.plan);
+  if (stamped.changed) state.plan = stamped.plan;
   if (els.planDay) {
     els.planDay.max = cadence === "monthly" ? "28" : "7";
     els.planDay.value = String(day);
@@ -815,13 +865,6 @@ function activateBuysTab() {
   if (tab) tab.click();
 }
 
-function activateHomeExec() {
-  callRenderer("switchView", "home");
-  queueMicrotask(() => {
-    els.execDraftPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
-  });
-}
-
 async function requestPortfolioAiReview({ force = false } = {}) {
   const ready = isPortfolioAiReady();
   if (!ready.ok) {
@@ -831,11 +874,11 @@ async function requestPortfolioAiReview({ force = false } = {}) {
   const pool = currentPoolAllocationResult();
   if (!pool) {
     state.aiPortfolioReview = { status: "error", error: "请先配置周期预算与目标仓位" };
-    renderPoolAllocation();
+    renderHomeTodayCard();
     return;
   }
   state.aiPortfolioReview = { status: "loading" };
-  renderPoolAllocation();
+  renderHomeTodayCard();
   try {
     const response = await fetch("/api/ai/review-portfolio", {
       method: "POST",
@@ -856,28 +899,11 @@ async function requestPortfolioAiReview({ force = false } = {}) {
       error: String(error.message || error),
     };
   }
-  renderPoolAllocation();
+  renderHomeTodayCard();
 }
 
 function bindDraftActions(root) {
   if (!root) return;
-  root.querySelectorAll("[data-generate-exec-drafts]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.executionDrafts = buildExecutionDraftsFromAllocation();
-      persistWorkspace();
-      renderPoolAllocation();
-      renderExecDraftPanel();
-      const summary = executionDraftSummary();
-      if (summary.pending > 0) {
-        activateHomeExec();
-      } else if (els.poolAllocPanel) {
-        const note = document.createElement("p");
-        note.className = "muted pool-alloc-note";
-        note.textContent = "本期无可执行整手";
-        els.poolAllocPanel.querySelector(".pool-alloc-block")?.appendChild(note);
-      }
-    });
-  });
   root.querySelectorAll("[data-ai-portfolio-review]").forEach((button) => {
     button.addEventListener("click", () => {
       requestPortfolioAiReview({ force: button.dataset.force === "true" });
@@ -889,11 +915,443 @@ function bindDraftActions(root) {
   root.querySelectorAll("[data-draft-skip]").forEach((button) => {
     button.addEventListener("click", () => skipExecutionDraft(button.dataset.draftSkip));
   });
+  root.querySelectorAll("[data-draft-refresh-quote]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      homeQuoteRefreshCooldownUntil = 0;
+      try {
+        await refreshQuotes(true);
+      } catch (_) {
+        /* ignore */
+      }
+      syncHomeExecutionDrafts({ persist: true });
+      renderHomeTodayCard();
+      renderExecDraftPanel();
+    });
+  });
+}
+
+function quoteAsOf(symbol) {
+  const quote = state.quotesBySymbol?.[symbol];
+  return quote?.as_of || quote?.tencent_as_of || state.quotesMeta?.updated_at || "";
+}
+
+function fmtPct(value, digits = 2) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  return `${n.toFixed(digits)}%`;
+}
+
+function syncHomeExecutionDrafts({ persist = true } = {}) {
+  if (!(state.etfs || []).length) return null;
+  const result = syncExecutionDraftsFromAllocation();
+  if (persist && result.changed) persistWorkspace();
+  return result;
+}
+
+let homeQuoteRefreshInFlight = null;
+let homeQuoteRefreshCooldownUntil = 0;
+
+function isQuoteFreshnessReason(text) {
+  return /行情不是|可执行报价|报价已过期|缺少行情时间/.test(String(text || ""));
+}
+
+function draftNeedsQuoteRefresh(draft) {
+  if (!draft || draft.status !== "pending") return false;
+  const snap = draft.decision_snapshot || {};
+  const live = state.quotesBySymbol?.[draft.symbol] || null;
+  const price =
+    Number(snap.quote_price) ||
+    Number(draft.price) ||
+    Number(live?.price) ||
+    0;
+  // 仅缺价时自动拉行情；不再因盘后时间戳过期反复刷新
+  return !(price > 0);
+}
+
+function formatExecBlockReasons(draft) {
+  const snap = draft.decision_snapshot || {};
+  const side = draft.side === "sell" ? "sell" : "buy";
+  const raw = (draft.readiness_reasons || snap.policy_reasons || [])
+    .map((row) => String(row || "").trim())
+    .filter(Boolean)
+    .filter((row) => !isQuoteFreshnessReason(row));
+  const lines = [];
+  const premium = Number(snap.premium_discount_pct);
+  const spread = Number(snap.bid_ask_spread_pct);
+
+  if (Number.isFinite(premium)) {
+    if (side === "buy" && premium >= 2) lines.push(`买入溢价 ${premium.toFixed(2)}%`);
+    if (side === "sell" && premium <= -2) lines.push(`卖出折价 ${Math.abs(premium).toFixed(2)}%`);
+  } else if (raw.some((row) => row.includes("折溢价"))) {
+    const hit = raw.find((row) => row.includes("折溢价"));
+    if (hit) lines.push(hit);
+  }
+
+  if (Number.isFinite(spread) && spread >= 0.2) {
+    lines.push(`买卖价差 ${spread.toFixed(2)}%`);
+  } else if (raw.some((row) => row.includes("缺少买卖价差"))) {
+    lines.push("缺少买卖价差数据");
+  }
+
+  if (raw.some((row) => row.includes("缺少有效成交价格"))) {
+    lines.push("缺少有效成交价格");
+  }
+  if (raw.some((row) => row.includes("分析数据不完整"))) {
+    lines.push("分析数据不完整，仅供预览");
+  }
+  if (raw.some((row) => row.includes("方向冲突"))) {
+    lines.push("组合计划方向冲突");
+  }
+  if (raw.some((row) => row.includes("行情缺失") || row.includes("冻结"))) {
+    lines.push("持仓行情缺失，冻结交易");
+  }
+  if (raw.some((row) => row.includes("手续费率超过限制"))) {
+    lines.push("手续费率超过限制");
+  }
+
+  return [...new Set(lines)];
+}
+
+function ensureFreshQuotesForHomeDrafts() {
+  const drafts = (state.executionDrafts || []).filter((item) => item.status === "pending");
+  if (!drafts.some(draftNeedsQuoteRefresh)) return;
+  if (homeQuoteRefreshInFlight) return homeQuoteRefreshInFlight;
+  if (Date.now() < homeQuoteRefreshCooldownUntil) return;
+  homeQuoteRefreshCooldownUntil = Date.now() + 90_000;
+  homeQuoteRefreshInFlight = (async () => {
+    try {
+      await refreshQuotes(true);
+      syncHomeExecutionDrafts({ persist: true });
+    } catch (_) {
+      /* 行情失败时保留现有清单，不把过期写成决策原因 */
+    } finally {
+      homeQuoteRefreshInFlight = null;
+    }
+    renderHomeTodayCard();
+    renderExecDraftPanel({ skipQuoteRefresh: true });
+  })();
+  return homeQuoteRefreshInFlight;
+}
+
+function draftHasDisplayedQuote(draft) {
+  const snap = draft?.decision_snapshot || {};
+  if (Number(snap.quote_price) > 0 || Number(draft?.price) > 0) return true;
+  if (snap.quote_as_of || Number.isFinite(parseQuoteTimestampMs(snap.market_timestamp))) return true;
+  const live = state.quotesBySymbol?.[draft?.symbol];
+  return Number(live?.price) > 0;
+}
+
+function draftActionButtons(draft) {
+  const status = draft.readiness_status || "ready";
+  const side = draft.side === "sell" ? "sell" : "buy";
+  if (draft.status !== "pending") {
+    const statusLabel =
+      draft.status === "confirmed" ? "已入账" : draft.status === "skipped" ? "已跳过" : draft.status;
+    return `<span class="exec-draft-done muted">${escapeHtml(statusLabel)}${
+      draft.skip_reason ? ` · ${escapeHtml(draft.skip_reason)}` : ""
+    }</span>`;
+  }
+  if (status !== "ready" && status !== "warning") {
+    const reasons = formatExecBlockReasons(draft);
+    if (reasons.length) {
+      return `<div class="exec-draft-block-reason" title="${escapeAttr(reasons.join("；"))}">
+        ${reasons.map((r) => `<span>${escapeHtml(r)}</span>`).join("")}
+      </div>`;
+    }
+    // 已有行情（含盘后停住的收盘价）不显示「更新中」；仅缺价且正在拉取时提示
+    if (homeQuoteRefreshInFlight && !draftHasDisplayedQuote(draft)) {
+      return `<span class="exec-draft-block-reason is-refreshing muted">正在更新报价…</span>`;
+    }
+    return "";
+  }
+  // 待确认但整手为 0：展示原因，不可确认入账
+  if (status === "warning" && !(Number(draft.shares) > 0)) {
+    const reasons = formatExecBlockReasons(draft);
+    return `<div class="exec-draft-zero-lot">
+      ${
+        reasons.length
+          ? `<div class="exec-draft-block-reason" title="${escapeAttr(reasons.join("；"))}">
+              ${reasons.map((r) => `<span>${escapeHtml(r)}</span>`).join("")}
+            </div>`
+          : ""
+      }
+      <button class="ghost-button home-touch-btn" type="button" data-draft-skip="${escapeAttr(draft.id)}">跳过</button>
+    </div>`;
+  }
+  const confirmLabel =
+    status === "warning"
+      ? "检查风险并确认"
+      : side === "sell"
+        ? "确认卖出"
+        : "确认买入";
+  return `<div class="exec-draft-actions">
+    <button class="primary-button home-touch-btn" type="button" data-draft-confirm="${escapeAttr(draft.id)}">${confirmLabel}</button>
+    <button class="ghost-button home-touch-btn" type="button" data-draft-skip="${escapeAttr(draft.id)}">跳过</button>
+  </div>`;
+}
+
+function draftRowHtml(draft) {
+  const side = draft.side === "sell" ? "sell" : "buy";
+  const sideLabel = side === "sell" ? "卖出" : "买入";
+  const orderAmount =
+    Number(draft.order_amount) || (Number(draft.shares) || 0) * (Number(draft.price) || 0);
+  const snap = draft.decision_snapshot || {};
+  const asOf = snap.quote_as_of || quoteAsOf(draft.symbol);
+  const readiness = draft.readiness_status || snap.policy_status || "";
+  const band = snap.band || draft.note || "";
+  const showReasonFooter =
+    draft.status === "pending" &&
+    (readiness === "ready" || (readiness === "warning" && Number(draft.shares) > 0));
+  const footerReasons = showReasonFooter
+    ? (draft.readiness_reasons || snap.policy_reasons || [])
+        .filter((row) => !isQuoteFreshnessReason(row))
+        .join("；")
+    : "";
+  return `<article class="exec-draft-row${side === "sell" ? " is-sell" : ""}${
+    draft.status !== "pending" ? " is-done" : ""
+  } readiness-${escapeAttr(readiness || "ready")}">
+    <header class="exec-draft-top">
+      <div class="exec-draft-identity">
+        <span class="trade-type ${side}">${sideLabel}</span>
+        <div class="exec-draft-nameblock">
+          <strong>${escapeHtml(draft.name || draft.symbol)}</strong>
+          <span class="muted">${escapeHtml(draft.symbol)}</span>
+        </div>
+        <span class="exec-readiness-chip">${escapeHtml(policyStatusLabel(readiness))}</span>
+      </div>
+      ${draftActionButtons(draft)}
+    </header>
+    <dl class="exec-draft-figures">
+      <div><dt>战略建议</dt><dd>${money(draft.suggested_amount)}</dd></div>
+      <div><dt>整手份数</dt><dd>${(draft.shares || 0).toLocaleString("zh-CN")} 份</dd></div>
+      <div><dt>预计成交</dt><dd>${money(orderAmount)}</dd></div>
+      <div><dt>手续费</dt><dd>${money(draft.fee)}</dd></div>
+    </dl>
+    <p class="exec-draft-secondary muted">
+      <span>折溢价 ${escapeHtml(fmtPct(snap.premium_discount_pct))}</span>
+      <span>价差 ${escapeHtml(fmtPct(snap.bid_ask_spread_pct))}</span>
+      ${band ? `<span>档位 ${escapeHtml(band)}</span>` : ""}
+      <span>行情时刻 ${escapeHtml(asOf || "-")}</span>
+    </p>
+    ${footerReasons ? `<p class="exec-draft-reason muted">${escapeHtml(footerReasons)}</p>` : ""}
+  </article>`;
+}
+
+function draftGroupHtml(title, drafts, extras = "") {
+  if (!drafts.length) return "";
+  return `
+    <section class="exec-draft-group" aria-label="${escapeAttr(title)}">
+      <div class="exec-draft-group-head">
+        <strong>${escapeHtml(title)}</strong>
+        <span class="muted">${extras}</span>
+      </div>
+      <div class="exec-draft-group-body">
+        ${drafts.map(draftRowHtml).join("")}
+      </div>
+    </section>`;
+}
+
+function closeHomeConfirmSheet() {
+  confirmingDraftId = null;
+  if (!els.homeConfirmSheet) return;
+  els.homeConfirmSheet.hidden = true;
+  els.homeConfirmSheet.innerHTML = "";
+}
+
+function recordDecisionForDraft(draft, action, { fee = null, orderAmount = null } = {}) {
+  const snap = draft.decision_snapshot || {};
+  const entry = {
+    id: `dec_${draft.id}_${action}_${Date.now().toString(36)}`,
+    period: draft.period,
+    symbol: draft.symbol,
+    side: draft.side === "sell" ? "sell" : "buy",
+    action,
+    strategic_amount: draft.suggested_amount,
+    order_amount: orderAmount != null ? orderAmount : draft.order_amount || draft.shares * draft.price,
+    fee: fee != null ? fee : draft.fee,
+    premium_discount_pct: snap.premium_discount_pct,
+    bid_ask_spread_pct: snap.bid_ask_spread_pct,
+    policy_status: draft.readiness_status || snap.policy_status || "",
+    policy_reasons: draft.readiness_reasons || snap.policy_reasons || [],
+    signal_snapshot_id: snap.signal_snapshot_id || state.execDraftsMeta?.signal_snapshot_id || null,
+    created_at: new Date().toISOString(),
+  };
+  state.decisionHistory = appendDecisionHistory(entry, state.decisionHistory);
+}
+
+function openHomeConfirmSheet(id) {
+  const draft = (state.executionDrafts || []).find((item) => item.id === id);
+  if (!draft || draft.status !== "pending" || !els.homeConfirmSheet) return;
+  const readiness = draft.readiness_status || draft.decision_snapshot?.policy_status || "ready";
+  if (readiness === "blocked" || readiness === "preview") return;
+  confirmingDraftId = id;
+  const side = draft.side === "sell" ? "sell" : "buy";
+  const sideLabel = side === "sell" ? "卖出" : "买入";
+  const notional = (Number(draft.shares) || 0) * (Number(draft.price) || 0);
+  const fee = Math.max(0, Number(draft.fee) || 0);
+  const cash = side === "sell" ? Math.max(0, notional - fee) : notional + fee;
+  const impact =
+    side === "sell"
+      ? `提交后：持仓减少 ${draft.shares.toLocaleString("zh-CN")} 份；新增一笔卖出记录；现金池预计增加 ${money(cash)}。`
+      : `提交后：持仓增加 ${draft.shares.toLocaleString("zh-CN")} 份；新增一笔买入记录；预计占用现金 ${money(cash)}。`;
+  const needsOverride = readiness === "warning";
+  els.homeConfirmSheet.hidden = false;
+  els.homeConfirmSheet.innerHTML = `
+    <section class="panel-block home-confirm-block" aria-label="确认入账">
+      <div class="panel-heading">
+        <div>
+          <h3 class="section-title">确认${sideLabel}</h3>
+          <p class="muted">${escapeHtml(draft.name || draft.symbol)} · ${escapeHtml(draft.symbol)} · ${escapeHtml(
+            policyStatusLabel(readiness),
+          )}</p>
+        </div>
+        <button class="ghost-button home-touch-btn" type="button" data-home-confirm-cancel>取消</button>
+      </div>
+      <p class="home-confirm-impact">${escapeHtml(impact)}</p>
+      <p class="muted">战略建议 ${money(draft.suggested_amount)} · 预计成交 ${money(notional)} · 费 ${money(fee)}</p>
+      <form class="home-confirm-form" data-home-confirm-form>
+        <label><span>成交价</span><input name="price" type="number" min="0" step="any" value="${escapeAttr(String(draft.price))}" required /></label>
+        <label><span>份额</span><input name="shares" type="number" min="0" step="any" value="${escapeAttr(String(draft.shares))}" required /></label>
+        <label><span>手续费</span><input name="fee" type="number" min="0" step="any" value="${escapeAttr(fee > 0 ? String(fee) : "")}" placeholder="自动估算" /></label>
+        <label class="grow"><span>备注</span><input name="note" type="text" value="${escapeAttr(
+          draft.note || (side === "sell" ? `卖出纪律 ${draft.period}` : `执行清单 ${draft.period}`),
+        )}" /></label>
+        ${
+          needsOverride
+            ? `<label class="grow home-override-box">
+                <span><input name="override_ack" type="checkbox" /> 我已知晓风险并人工放行</span>
+                <input name="override_reason" type="text" placeholder="放行原因（至少 3 个字）" required />
+              </label>`
+            : ""
+        }
+        <p class="muted home-confirm-status" data-home-confirm-status role="status"></p>
+        <button class="primary-button home-touch-btn" type="submit" data-home-confirm-submit>
+          确认${sideLabel}并入账 ${money(cash)}
+        </button>
+      </form>
+    </section>
+  `;
+  const form = els.homeConfirmSheet.querySelector("[data-home-confirm-form]");
+  const statusEl = els.homeConfirmSheet.querySelector("[data-home-confirm-status]");
+  const submit = els.homeConfirmSheet.querySelector("[data-home-confirm-submit]");
+  const refreshSubmitLabel = () => {
+    const price = Number(form.price.value);
+    const shares = Number(form.shares.value);
+    const feeInput = form.fee.value === "" ? fee : Number(form.fee.value);
+    const gross = (Number.isFinite(price) ? price : 0) * (Number.isFinite(shares) ? shares : 0);
+    const feeAmt = Number.isFinite(feeInput) && feeInput >= 0 ? feeInput : 0;
+    const total = side === "sell" ? Math.max(0, gross - feeAmt) : gross + feeAmt;
+    submit.textContent = `确认${sideLabel}并入账 ${money(total)}`;
+  };
+  form.addEventListener("input", refreshSubmitLabel);
+  els.homeConfirmSheet.querySelector("[data-home-confirm-cancel]")?.addEventListener("click", () => {
+    closeHomeConfirmSheet();
+  });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const price = Number(form.price.value);
+    const shares = Number(form.shares.value);
+    const feeRaw = form.fee.value;
+    const feeInput = feeRaw === "" ? null : Number(feeRaw);
+    const note = String(form.note.value || "").trim();
+    const date = draft.date || new Date().toISOString().slice(0, 10);
+    if (!(price > 0) || !(shares > 0)) {
+      if (statusEl) statusEl.textContent = "成交价与份额需大于 0";
+      return;
+    }
+    const quote = state.quotesBySymbol?.[draft.symbol] || null;
+    const holding = (state.etfs || []).find((item) => item.symbol === draft.symbol);
+    const indexCode =
+      holding &&
+      (state.analysisCache?.[draft.symbol]?.index_code ||
+        appConfig?.etf?.analysis_registry?.[draft.symbol]?.index_code ||
+        "");
+    const recheck = evaluateExecutionPolicy({
+      side,
+      phase: draft.decision_snapshot?.phase || planExecutionContext({ plan: state.plan }).phase,
+      strategy: draft.decision_snapshot?.strategy || state.plan?.strategy,
+      quote,
+      analysisUsable: draft.decision_snapshot?.analysis_usable !== false,
+      indexCode,
+      price,
+      now: new Date(),
+      executionPolicy: state.plan?.execution_policy,
+    });
+    const prevFp = draft.decision_snapshot?.policy_fingerprint || "";
+    if (recheck.metrics.policy_fingerprint !== prevFp || recheck.status !== readiness) {
+      if (statusEl) statusEl.textContent = "交易条件已变化，请重新确认";
+      syncHomeExecutionDrafts({ persist: true });
+      renderHomeTodayCard();
+      renderExecDraftPanel();
+      return;
+    }
+    if (needsOverride) {
+      const ack = Boolean(form.override_ack?.checked);
+      const reason = String(form.override_reason?.value || "").trim();
+      if (!ack) {
+        if (statusEl) statusEl.textContent = "请勾选已知晓风险";
+        return;
+      }
+      const gate = canSubmitWithOverride({
+        status: readiness,
+        overrideReason: reason,
+        allowWarningOverride: state.plan?.execution_policy?.allow_warning_override !== false,
+      });
+      if (!gate.ok) {
+        if (statusEl) statusEl.textContent = gate.reason || "无法放行";
+        return;
+      }
+    }
+    try {
+      const result = confirmDraftIntoLedger({
+        draft,
+        etfs: state.etfs,
+        buys: state.buys,
+        sells: state.sells,
+        executionDrafts: state.executionDrafts,
+        plan: state.plan,
+        tradingCost: state.plan?.trading_cost,
+        price,
+        shares,
+        fee: feeInput != null && Number.isFinite(feeInput) && feeInput >= 0 ? feeInput : null,
+        date,
+        note,
+      });
+      state.etfs = result.etfs;
+      state.buys = result.buys;
+      state.sells = result.sells;
+      state.executionDrafts = result.executionDrafts;
+      state.plan = result.plan;
+      state.plan = settlePlanAfterDrafts({ plan: state.plan }) || state.plan;
+      recordDecisionForDraft(draft, needsOverride ? "override" : "confirmed", {
+        fee: result.trade?.fee,
+        orderAmount: (result.trade?.price || 0) * (result.trade?.shares || 0),
+      });
+      closeHomeConfirmSheet();
+      persistWorkspace();
+      syncHomeExecutionDrafts({ persist: true });
+      renderHomeTodayCard();
+      renderExecDraftPanel();
+      renderPoolAllocation();
+      renderMetrics();
+      renderRows();
+      renderSidebarEtfs();
+    } catch (error) {
+      if (statusEl) statusEl.textContent = `入账失败：${String(error).replace("Error: ", "")}`;
+    }
+  });
+  els.homeConfirmSheet.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function confirmExecutionDraft(id) {
   const draft = (state.executionDrafts || []).find((item) => item.id === id);
   if (!draft || draft.status !== "pending") return;
+  const readiness = draft.readiness_status || draft.decision_snapshot?.policy_status || "ready";
+  if (readiness === "blocked" || readiness === "preview") return;
+  if (state.activeView === "home" && els.homeConfirmSheet) {
+    openHomeConfirmSheet(id);
+    return;
+  }
   confirmingDraftId = id;
   activateBuysTab();
   const side = draft.side === "sell" ? "sell" : "buy";
@@ -907,7 +1365,12 @@ function confirmExecutionDraft(id) {
     els.buyNote.value =
       draft.note || (side === "sell" ? `卖出纪律 ${draft.period}` : `执行清单 ${draft.period}`);
   }
-  if (els.buySubmit) els.buySubmit.textContent = "确认入账";
+  if (els.buySubmit) {
+    const notional = (Number(draft.shares) || 0) * (Number(draft.price) || 0);
+    const fee = Math.max(0, Number(draft.fee) || 0);
+    const cash = side === "sell" ? Math.max(0, notional - fee) : notional + fee;
+    els.buySubmit.textContent = `确认${side === "sell" ? "卖出" : "买入"}并入账 ${money(cash)}`;
+  }
   if (els.buyCancelEdit) els.buyCancelEdit.hidden = false;
   if (els.buyFormStatus) {
     const dir = side === "sell" ? "卖出" : "买入";
@@ -929,84 +1392,135 @@ function skipExecutionDraft(id) {
     status: "skipped",
     skip_reason: String(reason).trim(),
   });
+  recordDecisionForDraft(draft, "skipped");
   applyCashReserveSettlement();
   persistWorkspace();
+  if (confirmingDraftId === id) closeHomeConfirmSheet();
   renderPoolAllocation();
+  renderHomeTodayCard();
   renderExecDraftPanel();
 }
 
-function renderExecDraftPanel() {
-  if (!els.execDraftPanel) return;
+function renderHomeTodayCard() {
+  if (!els.homeTodayCard) return;
+  if (!(state.etfs || []).length) {
+    els.homeTodayCard.hidden = true;
+    els.homeTodayCard.innerHTML = "";
+    return;
+  }
   const summary = executionDraftSummary();
-  if (!summary.drafts.length) {
+  els.homeTodayCard.hidden = false;
+  els.homeTodayCard.innerHTML = `
+    <section class="panel-block home-today-block" aria-label="今日结论">
+      <div class="panel-heading">
+        <div>
+          <h3 class="section-title">今日结论</h3>
+        </div>
+        <div class="home-today-heading-actions">
+          <button class="ghost-button home-touch-btn" type="button" data-ai-portfolio-review>AI 分析</button>
+          <button class="ghost-button home-touch-btn" type="button" data-reevaluate-strategy>重新评估本期策略</button>
+        </div>
+      </div>
+      <div class="home-today-metrics" role="list">
+        <div class="pool-alloc-metric" role="listitem"><span>可执行买入</span><strong>${
+          summary.readyBuys.length + summary.warningBuys.length
+        }</strong></div>
+        <div class="pool-alloc-metric" role="listitem"><span>等待买入</span><strong>${
+          summary.waitingBuys.length
+        }</strong></div>
+        <div class="pool-alloc-metric" role="listitem"><span>卖出</span><strong>${
+          summary.pendingSells.length
+        }</strong></div>
+        <div class="pool-alloc-metric" role="listitem"><span>可执行现金</span><strong>${money(
+          summary.buyCash,
+        )}</strong></div>
+        <div class="pool-alloc-metric" role="listitem"><span>等待改善</span><strong>${money(
+          summary.waitingCash,
+        )}</strong></div>
+        <div class="pool-alloc-metric" role="listitem"><span>保留现金</span><strong>${money(
+          summary.keptCash,
+        )}</strong></div>
+      </div>
+      ${
+        summary.stale
+          ? `<p class="home-today-meta"><span class="home-stale-flag">清单已过期，需要更新</span></p>`
+          : ""
+      }
+      ${portfolioReviewResultHtml(state.aiPortfolioReview)}
+    </section>
+  `;
+  bindDraftActions(els.homeTodayCard);
+  els.homeTodayCard.querySelector("[data-reevaluate-strategy]")?.addEventListener("click", () => {
+    const ok = window.confirm(
+      "将重新评估本期策略信号（PE 档位/评分/情绪），并重建所有待执行清单。已确认与已跳过记录会保留。是否继续？",
+    );
+    if (!ok) return;
+    reevaluatePeriodStrategy();
+    persistWorkspace();
+    renderHomeTodayCard();
+    renderExecDraftPanel();
+    renderPoolAllocation();
+  });
+}
+
+function renderExecDraftPanel({ skipQuoteRefresh = false } = {}) {
+  if (!els.execDraftPanel) return;
+  if (!(state.etfs || []).length) {
     els.execDraftPanel.hidden = true;
     els.execDraftPanel.innerHTML = "";
     return;
   }
-  const headerParts = [];
-  if (summary.pending > 0) headerParts.push(`待执行 ${summary.pending} 笔`);
-  if (summary.executed > 0) headerParts.push(`已执行 ${money(summary.executed)}`);
-  if (summary.drafts.length > 1) headerParts.push(`合计建议 ${money(summary.suggested)}`);
-  if (!headerParts.length) headerParts.push("已处理完毕");
+  const summary = executionDraftSummary();
+  const done = summary.drafts.filter((item) => item.status !== "pending");
+  const ready = summary.drafts.filter(
+    (item) => item.status === "pending" && item.readiness_status === "ready",
+  );
+  const warning = summary.drafts.filter(
+    (item) => item.status === "pending" && item.readiness_status === "warning",
+  );
+  const waiting = summary.drafts.filter(
+    (item) =>
+      item.status === "pending" &&
+      (item.readiness_status === "preview" || item.readiness_status === "blocked"),
+  );
+
   els.execDraftPanel.hidden = false;
   els.execDraftPanel.innerHTML = `
-    <div class="panel-heading">
-      <div>
-        <h3 class="section-title">本期执行清单</h3>
-        <p class="muted">${headerParts.join(" · ")}</p>
+    <section class="panel-block exec-draft-block" aria-label="本期执行清单">
+      <div class="panel-heading">
+        <div>
+          <h3 class="section-title">本期执行清单</h3>
+        </div>
       </div>
-    </div>
-    <div class="exec-draft-list">
-      ${summary.drafts
-        .map((draft) => {
-          const statusLabel =
-            draft.status === "confirmed" ? "已入账" : draft.status === "skipped" ? "已跳过" : "待执行";
-          const side = draft.side === "sell" ? "sell" : "buy";
-          const sideLabel = side === "sell" ? "卖出" : "买入";
-          const actions =
-            draft.status === "pending"
-              ? `<span class="exec-draft-actions">
-                  <button class="primary-button compact" type="button" data-draft-confirm="${escapeAttr(draft.id)}">确认入账</button>
-                  <button class="ghost-button compact" type="button" data-draft-skip="${escapeAttr(draft.id)}">跳过</button>
-                </span>`
-              : `<span class="muted">${escapeHtml(statusLabel)}${draft.skip_reason ? ` · ${escapeHtml(draft.skip_reason)}` : ""}</span>`;
-          const orderAmount = (Number(draft.shares) || 0) * (Number(draft.price) || 0);
-          return `<div class="exec-draft-row${side === "sell" ? " is-sell" : ""}">
-            <div class="exec-draft-main">
-              <span class="trade-type ${side}">${sideLabel}</span>
-              <strong>${escapeHtml(draft.name || draft.symbol)}</strong>
-              <span class="muted">${escapeHtml(draft.symbol)}</span>
-            </div>
-            <div class="exec-draft-meta">
-              <span>${draft.shares.toLocaleString("zh-CN")} 份 × ${money(draft.price, "CNY", 3)} ≈ ${money(orderAmount)}</span>
-              <span>费 ${money(draft.fee)}</span>
-            </div>
-            ${actions}
-          </div>`;
-        })
-        .join("")}
-    </div>
+      ${
+        summary.drafts.length
+          ? `<div class="exec-draft-list">
+              ${draftGroupHtml("可以执行", ready, `${ready.length} 笔`)}
+              ${draftGroupHtml("需要确认", warning, `${warning.length} 笔`)}
+              ${draftGroupHtml(
+                "等待条件改善",
+                waiting,
+                waiting.length ? `${waiting.length} 笔 · ${money(summary.waitingCash)}` : "",
+              )}
+              ${draftGroupHtml("已处理", done, `${done.length} 笔`)}
+            </div>`
+          : `<p class="muted exec-draft-empty">本期暂无执行项。</p>`
+      }
+    </section>
   `;
   bindDraftActions(els.execDraftPanel);
+  if (!skipQuoteRefresh) ensureFreshQuotesForHomeDrafts();
 }
 
 function renderPoolAllocation() {
-  if (!els.poolAllocPanel) return;
-  els.poolAllocPanel.innerHTML = poolAllocationHtml({ clickable: true });
-  els.poolAllocPanel.querySelectorAll("[data-analyze]").forEach((button) => {
-    button.addEventListener("click", () => openAnalysis(button.dataset.analyze));
-  });
-  bindDraftActions(els.poolAllocPanel);
   renderSidebarEtfs();
   ensurePoolAnalysisPrefetch({
     onUpdate: () => {
-      if (!els.poolAllocPanel || (state.activeView !== "etf" && state.activeView !== "home")) return;
-      els.poolAllocPanel.innerHTML = poolAllocationHtml({ clickable: true });
-      els.poolAllocPanel.querySelectorAll("[data-analyze]").forEach((button) => {
-        button.addEventListener("click", () => openAnalysis(button.dataset.analyze));
-      });
-      bindDraftActions(els.poolAllocPanel);
+      if (state.activeView !== "etf" && state.activeView !== "home") return;
       renderSidebarEtfs();
+      syncHomeExecutionDrafts({ persist: true });
+      renderHomeTodayCard();
+      renderExecDraftPanel();
     },
   });
 }
@@ -1234,6 +1748,8 @@ export function addBuyRecord() {
       if (els.buyFee) els.buyFee.value = "";
       if (els.buyNote) els.buyNote.value = "";
       renderBuys();
+      syncHomeExecutionDrafts({ persist: true });
+      renderExecDraftPanel();
       renderPoolAllocation();
       renderMetrics();
       renderRows();
@@ -1242,6 +1758,7 @@ export function addBuyRecord() {
       if (els.buyFormStatus) {
         els.buyFormStatus.textContent = `已入账 ${symbol} ${date}`;
       }
+      callRenderer("switchView", "home");
       return;
     } catch (error) {
       if (els.buyFormStatus) {
@@ -1301,6 +1818,7 @@ export function addBuyRecord() {
 export async function renderEtfPool({ refresh = false } = {}) {
   if (!els.etfRows) return;
   syncPlanForm();
+  if (refresh) homeQuoteRefreshCooldownUntil = 0;
   await refreshQuotes(refresh);
   const execution = planExecutionContext({ plan: state.plan, holdings: currentPlanHoldings() });
   if (execution.reached && !state.plan.initial_build_completed_at) {
@@ -1310,10 +1828,14 @@ export async function renderEtfPool({ refresh = false } = {}) {
   }
   renderInitialSummary();
   renderMetrics();
+  syncHomeExecutionDrafts({ persist: true });
+  renderHomeTodayCard();
+  renderExecDraftPanel();
   renderPoolAllocation();
   renderRows();
   renderBuys();
   renderSidebarEtfs();
+  if (els.homeEmptyGuide) els.homeEmptyGuide.hidden = state.etfs.length > 0;
 }
 
 export function renderSidebarEtfs() {

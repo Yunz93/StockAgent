@@ -3,6 +3,11 @@
  *
  * holdings 结构对齐 pool-alloc.buildPoolHoldingsForAllocation：
  *   { symbol, name, targetWeight, actualWeight, marketValue, pePct, grade, assetClass, shares? }
+ *
+ * 建仓期（phase=initial）：
+ * - 未超过绝对目标金额时，不得因相对超配卖出
+ * - 禁用一月年度再平衡
+ * - 估值止盈仅卖出绝对超额部分（current - absolute_target）
  */
 
 import { estimatedTradeFee } from "./decision-support.js";
@@ -47,32 +52,27 @@ function quotePrice(quotes, symbol) {
   return price > 0 ? price : 0;
 }
 
+function isRich(item) {
+  const pe = Number(item.pePct);
+  const pe01 = Number.isFinite(pe) ? (pe <= 1 ? pe : pe / 100) : null;
+  const grade = String(item.grade || "").toUpperCase();
+  return (pe01 != null && pe01 > 0.85) || grade === "E";
+}
+
 /**
- * @returns {Array<{
- *   symbol: string,
- *   name: string,
- *   side: "sell",
- *   rule: string,
- *   band: string,
- *   hint: string,
- *   suggested_amount: number,
- *   price: number,
- *   shares: number,
- *   fee: number,
- *   targetWeight: number,
- *   actualWeight: number,
- *   sellToWeight: number,
- *   drift: number,
- * }>}
+ * @returns {Array<object>}
  */
 export function buildRebalanceSellSuggestions({
   holdings = [],
   quotes = {},
   plan = {},
   now = new Date(),
+  phase = "recurring",
+  absoluteTargetsBySymbol = {},
 } = {}) {
   const tradingCost = normalizeTradingCost(plan?.trading_cost);
   const isJanuary = now instanceof Date && !Number.isNaN(now.getTime()) && now.getMonth() === 0;
+  const isInitial = String(phase || "").toLowerCase() === "initial";
   const rows = Array.isArray(holdings) ? holdings : [];
   const totalValue = rows.reduce((sum, item) => sum + Math.max(0, Number(item.marketValue) || 0), 0);
   if (!(totalValue > 0)) return [];
@@ -85,11 +85,58 @@ export function buildRebalanceSellSuggestions({
     const drift = actual - target;
     if (!(drift > 0)) continue;
 
+    const mv = Math.max(0, Number(item.marketValue) || 0);
+    const absTarget = Math.max(
+      0,
+      Number(
+        absoluteTargetsBySymbol?.[item.symbol] ??
+          item.absoluteTargetAmount ??
+          item.absolute_target_amount,
+      ) || 0,
+    );
     const cls = String(item.assetClass || "").trim().toLowerCase();
-    const pe = Number(item.pePct);
-    const pe01 = Number.isFinite(pe) ? (pe <= 1 ? pe : pe / 100) : null;
-    const grade = String(item.grade || "").toUpperCase();
-    const rich = (pe01 != null && pe01 > 0.85) || grade === "E";
+    const rich = isRich(item);
+
+    if (isInitial) {
+      // 未超过绝对目标：禁止因相对权重卖出
+      if (!(absTarget > 0) || !(mv > absTarget + 1e-9)) continue;
+      const excess = mv - absTarget;
+      const driftOk = cls === "equity_growth" ? drift > 15 : drift > 10;
+      if (!(rich && driftOk)) continue;
+
+      const price = quotePrice(quotes, item.symbol);
+      if (!(price > 0)) continue;
+      const shares = lotFloorShares(excess, price, tradingCost.lot_size, heldShares(item, price));
+      if (!(shares > 0)) continue;
+      // 不得卖到绝对目标以下：整手后仍需 MV - shares*price >= absTarget - epsilon
+      let safeShares = shares;
+      while (safeShares >= tradingCost.lot_size) {
+        const after = mv - safeShares * price;
+        if (after + 1e-6 >= absTarget) break;
+        safeShares -= tradingCost.lot_size;
+      }
+      if (!(safeShares > 0)) continue;
+      const suggested_amount = Math.round(safeShares * price * 100) / 100;
+      const fee = Math.round(estimatedTradeFee(suggested_amount, tradingCost) * 100) / 100;
+      suggestions.push({
+        symbol: item.symbol,
+        name: item.name || item.symbol,
+        side: "sell",
+        rule: "valuation_trim_absolute",
+        band: "估值止盈",
+        hint: `建仓期绝对超额 ${suggested_amount.toFixed(0)}，止盈至目标金额`,
+        suggested_amount,
+        price: Math.round(price * 1e6) / 1e6,
+        shares: safeShares,
+        fee,
+        targetWeight: target,
+        actualWeight: actual,
+        sellToWeight: target,
+        drift: Math.round(drift * 10) / 10,
+        absoluteTargetAmount: absTarget,
+      });
+      continue;
+    }
 
     const candidates = [];
     if (cls === "equity_growth") {
@@ -119,7 +166,6 @@ export function buildRebalanceSellSuggestions({
     }
     if (!candidates.length) continue;
 
-    // 两规则同时命中取卖出量较大者
     let best = null;
     for (const candidate of candidates) {
       const amount = sellAmountToWeight({

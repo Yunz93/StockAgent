@@ -13,6 +13,7 @@ import {
   projectedPosition,
   returnCorrelation,
   riskMetrics,
+  stampInitialBuildStarted,
 } from "../js/decision-support.js";
 
 test("monthly plan exposes current cycle and scheduled day", () => {
@@ -101,7 +102,7 @@ test("initial build budget is independent from recurring contribution", () => {
   assert.equal(context.budget, 20000);
 });
 
-test("initial build spreads target across configured months", () => {
+test("initial build spreads remaining gap across remaining months", () => {
   const context = planExecutionContext({
     plan: {
       amount: 5000,
@@ -114,9 +115,11 @@ test("initial build spreads target across configured months", () => {
   });
   assert.equal(context.phase, "initial");
   assert.equal(context.initialMonths, 6);
-  assert.equal(context.monthlyInstallment, 5000);
-  assert.equal(context.budget, 5000);
+  assert.equal(context.remainingMonths, 6);
   assert.equal(context.initialGap, 20000);
+  // 尚缺 20000 ÷ 剩余 6 个月，不再按原始目标 30000 均分
+  assert.equal(context.monthlyInstallment, 3333.33);
+  assert.equal(context.budget, 3333.33);
 });
 
 test("initial build weekly cadence splits the monthly installment", () => {
@@ -129,9 +132,37 @@ test("initial build weekly cadence splits the monthly installment", () => {
     },
     holdings: [{ marketValue: 0 }],
   });
-  // target 60000 / 4 months = 15000/month / 4 weeks = 3750
+  // 尚缺 60000 / 4 months = 15000/month / 4 weeks = 3750
   assert.equal(context.monthlyInstallment, 15000);
   assert.equal(context.budget, 3750);
+});
+
+test("initial build catch-up uses full remaining gap after horizon elapsed", () => {
+  const context = planExecutionContext({
+    plan: {
+      capital_base: 100000,
+      initial_target_pct: 30,
+      initial_months: 6,
+      cadence: "monthly",
+      initial_build_started_at: "2025-01-10T00:00:00.000Z",
+    },
+    holdings: [{ marketValue: 10000 }],
+    now: new Date("2025-08-10T00:00:00.000Z"),
+  });
+  assert.equal(context.remainingMonths, 1);
+  assert.equal(context.budget, 20000);
+});
+
+test("stampInitialBuildStarted writes once for configured plans", () => {
+  const first = stampInitialBuildStarted(
+    { capital_base: 100000, initial_target_pct: 30 },
+    new Date("2026-08-10T00:00:00.000Z"),
+  );
+  assert.equal(first.changed, true);
+  assert.equal(first.plan.initial_build_started_at, "2026-08-10T00:00:00.000Z");
+  const second = stampInitialBuildStarted(first.plan, new Date("2026-09-01T00:00:00.000Z"));
+  assert.equal(second.changed, false);
+  assert.equal(second.plan.initial_build_started_at, "2026-08-10T00:00:00.000Z");
 });
 
 test("completed initial build stays in recurring mode after a drawdown", () => {

@@ -78,6 +78,16 @@ export function buildPoolHoldingsForAllocation({ preferLive = null } = {}) {
           ? (valueMap[entry.symbol] / total) * 100
           : 0
         : null;
+    const quote = state.quotesBySymbol[entry.symbol];
+    const pq =
+      quote?.product_quality && typeof quote.product_quality === "object"
+        ? quote.product_quality
+        : {};
+    const indexCode =
+      appConfig?.etf?.analysis_registry?.[entry.symbol]?.index_code ||
+      appConfig?.etf?.analysis_support?.[entry.symbol]?.index_code ||
+      cached?.index_code ||
+      "";
     return {
       symbol: entry.symbol,
       name: poolEntryDisplayName(entry, cached),
@@ -93,6 +103,20 @@ export function buildPoolHoldingsForAllocation({ preferLive = null } = {}) {
       biasPct: analyzed ? cached?.technicals?.bias_pct ?? null : null,
       goldMacro: analyzed ? cached?.gold_macro || null : null,
       analyzed,
+      indexCode: String(indexCode || "").trim() || null,
+      tradingPremiumPct:
+        pq.premium_discount_pct != null && Number.isFinite(Number(pq.premium_discount_pct))
+          ? Number(pq.premium_discount_pct)
+          : null,
+      tradingSpreadPct:
+        pq.bid_ask_spread_pct != null && Number.isFinite(Number(pq.bid_ask_spread_pct))
+          ? Number(pq.bid_ask_spread_pct)
+          : null,
+      iopv: pq.iopv != null && Number.isFinite(Number(pq.iopv)) ? Number(pq.iopv) : null,
+      quoteAsOf: quote?.as_of || quote?.tencent_as_of || null,
+      marketTimestamp: quote?.market_timestamp || null,
+      quoteProvider: quote?.provider || null,
+      dataAsOf: cached?.updated_at || quote?.as_of || null,
     };
   });
 }
@@ -237,37 +261,14 @@ export function poolAllocationHtml({ highlightSymbol = null, clickable = true } 
   const prelimClass = preliminary ? " is-preliminary" : "";
   const prelimTag = preliminary ? `<em class="pool-alloc-prelim-tag">初步</em>` : "";
 
-  const buildProgress =
-    execution.phase === "initial"
-      ? (() => {
-          const target = Math.max(0, Number(execution.targetAmount) || 0);
-          const current = Math.max(0, Number(execution.currentValue) || 0);
-          const gap = Math.max(0, Number(execution.initialGap) || 0);
-          const pct = target > 0 ? Math.min(100, Math.round((current / target) * 1000) / 10) : 0;
-          const pctLabel = Number.isInteger(pct) ? String(pct) : pct.toFixed(1);
-          return `
-          <div
-            class="pool-alloc-build-progress"
-            role="progressbar"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow="${pct}"
-            aria-label="初期建仓进度 ${pctLabel}%"
-          >
-            <div class="pool-alloc-build-progress-meta">
-              <span>${escapeHtml(execution.phaseLabel)}</span>
-              <span>${pctLabel}% · 尚缺 ${money(gap)}</span>
-            </div>
-            <div class="pool-alloc-build-progress-track">
-              <div class="pool-alloc-build-progress-fill" style="width:${pct}%"></div>
-            </div>
-          </div>`;
-        })()
-      : "";
   const phaseLine =
     execution.phase === "initial"
       ? ""
       : `<p class="muted">${execution.phaseLabel} · ${strategyName} · ${escapeHtml(cadenceLabel)}${escapeHtml(String(dayLabel))}</p>`;
+  const budgetTitle =
+    execution.phase === "initial"
+      ? "本期可投入上限：尚缺 ÷ 剩余建仓月数（再按频率切分）"
+      : "计划中的全池每期预算";
 
   return `
     <section class="panel-block pool-alloc-block" aria-label="本期分配">
@@ -277,16 +278,14 @@ export function poolAllocationHtml({ highlightSymbol = null, clickable = true } 
           ${phaseLine}
         </div>
         <div class="pool-alloc-heading-actions">
-          <button class="ghost-button compact" type="button" data-ai-portfolio-review>AI 审视</button>
-          <button class="primary-button compact" type="button" data-generate-exec-drafts>生成清单</button>
+          <button class="ghost-button home-touch-btn" type="button" data-ai-portfolio-review>AI 复核</button>
         </div>
       </div>
-      ${buildProgress}
       <div class="pool-alloc-summary${prelimClass}">
-        <div class="pool-alloc-metric"><span>${execution.phase === "initial" ? "建仓缺口" : "本期预算"}</span><strong>${money(pool.budget)}</strong></div>
-        <div class="pool-alloc-metric"><span>建议部署${prelimTag}</span><strong>${money(pool.deployTotal)}</strong></div>
-        <div class="pool-alloc-metric"><span>留现金</span><strong>${money(pool.cashKeep)}</strong></div>
-        <div class="pool-alloc-metric"><span>现金池</span><strong>${money(cashBalance)}</strong></div>
+        <div class="pool-alloc-metric" title="${escapeAttr(budgetTitle)}"><span>本期预算</span><strong>${money(pool.budget)}</strong></div>
+        <div class="pool-alloc-metric" title="策略分配后建议买入合计"><span>建议部署${prelimTag}</span><strong>${money(pool.deployTotal)}</strong></div>
+        <div class="pool-alloc-metric" title="本期预算未部署部分"><span>留现金</span><strong>${money(pool.cashKeep)}</strong></div>
+        <div class="pool-alloc-metric" title="计划现金池余额（建仓期不自动释放）"><span>现金池</span><strong>${money(cashBalance)}</strong></div>
       </div>
       <div class="dca-alloc-table" aria-label="各品种建议金额">
         <div class="dca-alloc-head"><span>品种</span><span>状态</span><span class="num">金额</span></div>
@@ -303,10 +302,10 @@ export function poolAllocationHtml({ highlightSymbol = null, clickable = true } 
             const badge = dataStatusBadge(analyzed, quoteMissing);
             const chip = allocStatusChip(row);
             const chipClass =
-              row.amount > 0 ? "is-buy" : chip === "偏贵" || chip === "攒一手" ? "is-wait" : "is-skip";
+              row.amount > 0 ? "is-buy" : chip === "偏贵" || chip === "等待合适时机" ? "is-wait" : "is-skip";
             const hint = allocStatusHint(chip);
             const nameCell = clickable
-              ? `<button class="link-button pool-alloc-name" type="button" data-analyze="${escapeAttr(row.symbol)}">${escapeHtml(row.name)}${badge}${feeHint}</button>`
+              ? `<button class="link-button pool-alloc-name home-touch-link" type="button" data-analyze="${escapeAttr(row.symbol)}">${escapeHtml(row.name)}${badge}${feeHint}</button>`
               : `<span>${escapeHtml(row.name)}${badge}${feeHint}</span>`;
             return `<div class="dca-alloc-row${active}">${nameCell}<span><span class="alloc-status-chip ${chipClass}" title="${escapeAttr(hint)}">${escapeHtml(chip)}</span></span><span class="${amountClass}">${row.amount > 0 ? money(row.amount) : "—"}</span></div>`;
           })

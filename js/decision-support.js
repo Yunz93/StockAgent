@@ -99,7 +99,7 @@ export function normalizeInitialMonths(value) {
   return Math.min(36, number);
 }
 
-/** 将「按月均分」换算到当前执行频率下的每期额度。 */
+/** 将月额度换算到当前执行频率下的每期额度。 */
 export function periodsPerMonth(cadence) {
   const id = String(cadence || "monthly").toLowerCase();
   if (id === "weekly") return 4;
@@ -107,7 +107,46 @@ export function periodsPerMonth(cadence) {
   return 1;
 }
 
-export function planExecutionContext({ plan = {}, holdings = [] } = {}) {
+/** 自建仓起始日起已过整月数（不足一月计 0）。 */
+export function initialBuildMonthsElapsed(startedAt, now = new Date()) {
+  if (!startedAt) return 0;
+  const start = new Date(startedAt);
+  const end = now instanceof Date ? now : new Date(now);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+  let months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
+  if (end.getDate() < start.getDate()) months -= 1;
+  return Math.max(0, months);
+}
+
+/** 剩余建仓月数：至少 1，逾期后一期打满剩余缺口。 */
+export function remainingInitialMonths(initialMonths, startedAt, now = new Date()) {
+  const total = normalizeInitialMonths(initialMonths);
+  const elapsed = initialBuildMonthsElapsed(startedAt, now);
+  return Math.max(1, total - elapsed);
+}
+
+/**
+ * 若已配置初期建仓且尚未完成、尚未打戳，写入 initial_build_started_at。
+ * 纯函数：返回是否变更后的 plan 副本。
+ */
+export function stampInitialBuildStarted(plan = {}, now = new Date()) {
+  const source = plan && typeof plan === "object" ? plan : {};
+  if (source.initial_build_started_at || source.initial_build_completed_at) {
+    return { plan: source, changed: false };
+  }
+  const capitalBase = Math.max(0, Number(source.capital_base) || 0);
+  const initialTargetPct = Math.min(100, Math.max(0, Number(source.initial_target_pct) || 0));
+  if (!(capitalBase > 0 && initialTargetPct > 0)) {
+    return { plan: source, changed: false };
+  }
+  const stamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  return {
+    plan: { ...source, initial_build_started_at: stamp },
+    changed: true,
+  };
+}
+
+export function planExecutionContext({ plan = {}, holdings = [], now = new Date() } = {}) {
   const capitalBase = Math.max(0, Number(plan.capital_base) || 0);
   const initialTargetPct = Math.min(100, Math.max(0, Number(plan.initial_target_pct) || 0));
   const initialMonths = normalizeInitialMonths(plan.initial_months ?? plan.initialMonths);
@@ -122,8 +161,10 @@ export function planExecutionContext({ plan = {}, holdings = [] } = {}) {
   const markedComplete = Boolean(plan.initial_build_completed_at);
   const phase = configured && !markedComplete && !reached ? "initial" : "recurring";
   const recurringBudget = Math.max(0, Number(plan.amount) || 0);
+  // 按「剩余缺口 ÷ 剩余月数」重算，逾期剩 1 个月则打满缺口；不再按原始目标均分。
+  const monthsLeft = remainingInitialMonths(initialMonths, plan.initial_build_started_at, now);
   const monthlyInstallment =
-    initialMonths > 0 ? Math.round((targetAmount / initialMonths) * 100) / 100 : targetAmount;
+    monthsLeft > 0 ? Math.round((initialGap / monthsLeft) * 100) / 100 : initialGap;
   const periodInstallment =
     Math.round((monthlyInstallment / periodsPerMonth(plan.cadence)) * 100) / 100;
   const initialBudget =
@@ -135,6 +176,7 @@ export function planExecutionContext({ plan = {}, holdings = [] } = {}) {
     capitalBase,
     initialTargetPct,
     initialMonths,
+    remainingMonths: monthsLeft,
     monthlyInstallment,
     periodInstallment,
     targetAmount,

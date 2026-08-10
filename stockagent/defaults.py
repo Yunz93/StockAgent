@@ -196,18 +196,25 @@ DEFAULT_STRATEGY_CONFIG = {
 }
 
 DEFAULT_WORKSPACE = {
-    "version": 8,
+    "version": 9,
     "updated_at": None,
     "etfs": [],
     "buys": [],
     "sells": [],
     "execution_drafts": [],
+    "execution_drafts_meta": {
+        "synced_at": None,
+        "fingerprint": "",
+        "signal_snapshot_id": None,
+    },
+    "decision_history": [],
     "plan": {
         "name": "默认定投计划",
         "amount": 2000,
         "capital_base": 0,
         "initial_target_pct": 0,
         "initial_months": 1,
+        "initial_build_started_at": None,
         "initial_build_completed_at": None,
         "cadence": "monthly",
         "day": 1,
@@ -224,6 +231,18 @@ DEFAULT_WORKSPACE = {
         },
         "pending_orders": {},
         "cash_reserve": {"balance": 0, "history": []},
+        "execution_policy": {
+            "premium_warn_pct": 2,
+            "premium_block_pct": 5,
+            "discount_warn_pct": 2,
+            "discount_block_pct": 5,
+            "spread_warn_pct": 0.2,
+            "spread_block_pct": 0.3,
+            "quote_max_age_minutes": 15,
+            "pe_hysteresis_pp": 3,
+            "allow_warning_override": True,
+        },
+        "signal_snapshots": {},
     },
     "prefs": {},
 }

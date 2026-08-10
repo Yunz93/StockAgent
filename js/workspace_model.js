@@ -1,10 +1,18 @@
 import { DEFAULT_TARGET_WEIGHTS } from "./constants.js";
 import { normalizeAddPlanConfig } from "./add-plan.js";
 import {
+  DEFAULT_EXECUTION_POLICY,
+  normalizeExecutionPolicy,
+} from "./execution-policy.js";
+import {
   normalizeStrategyConfig,
   normalizeStrategyId,
   STRATEGY_IDS,
 } from "./strategy.js";
+
+export { normalizeExecutionPolicy, DEFAULT_EXECUTION_POLICY };
+
+export const WORKSPACE_VERSION = 9;
 
 export const DEFAULT_TRADING_COST = Object.freeze({
   min_commission: 5,
@@ -102,6 +110,178 @@ export function clampWeight(value) {
   return Math.min(100, Math.round(number * 100) / 100);
 }
 
+function normalizeSignalHolding(row) {
+  if (!row || typeof row !== "object") return null;
+  const pe = Number(row.pe_pct);
+  const base = Number(row.base_mult);
+  const sent = Number(row.sentiment_mult);
+  const eff = Number(row.effective_mult);
+  const score = Number(row.sentiment_score);
+  const bandIndex = Number.parseInt(row.band_index, 10);
+  return {
+    pe_pct: Number.isFinite(pe) ? Math.round(pe * 1e4) / 1e4 : null,
+    grade: row.grade != null ? String(row.grade).toUpperCase() : null,
+    asset_class: row.asset_class != null ? String(row.asset_class) : null,
+    spread_pct: Number.isFinite(Number(row.spread_pct))
+      ? Math.round(Number(row.spread_pct) * 1e4) / 1e4
+      : null,
+    bias_pct: Number.isFinite(Number(row.bias_pct))
+      ? Math.round(Number(row.bias_pct) * 1e4) / 1e4
+      : null,
+    sentiment_market: row.sentiment_market != null ? String(row.sentiment_market) : null,
+    sentiment_score: Number.isFinite(score) ? score : null,
+    base_mult: Number.isFinite(base) ? Math.round(base * 1000) / 1000 : null,
+    sentiment_mult: Number.isFinite(sent) ? Math.round(sent * 1000) / 1000 : null,
+    effective_mult: Number.isFinite(eff) ? Math.round(eff * 1000) / 1000 : null,
+    band: row.band != null ? String(row.band) : null,
+    band_index: Number.isFinite(bandIndex) ? bandIndex : null,
+    data_as_of: row.data_as_of != null ? String(row.data_as_of) : null,
+    analysis_usable: row.analysis_usable == null ? true : Boolean(row.analysis_usable),
+    index_code: row.index_code != null ? String(row.index_code) : null,
+    strategy: row.strategy != null ? normalizeStrategyId(row.strategy) : null,
+  };
+}
+
+export function normalizeSignalSnapshots(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const entries = [];
+  for (const [rawKey, raw] of Object.entries(value)) {
+    const period = String(rawKey || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(period) || !raw || typeof raw !== "object") continue;
+    const holdingsIn = raw.holdings && typeof raw.holdings === "object" ? raw.holdings : {};
+    const holdings = {};
+    for (const [symRaw, row] of Object.entries(holdingsIn)) {
+      const digits = String(symRaw || "").replace(/\D/g, "");
+      const symbol = digits.padStart(6, "0");
+      if (symbol.length !== 6 || !digits) continue;
+      const normalized = normalizeSignalHolding(row);
+      if (normalized) holdings[symbol] = normalized;
+    }
+    entries.push({
+      period,
+      snapshot: {
+        id: String(raw.id || "").trim() || `sig_${period}`,
+        period,
+        created_at: String(raw.created_at || "").trim() || null,
+        strategy: normalizeStrategyId(raw.strategy),
+        strategy_config: normalizeStrategyConfig(raw.strategy_config),
+        holdings,
+        config_fingerprint: String(raw.config_fingerprint || "").trim(),
+      },
+    });
+  }
+  entries.sort((a, b) => (a.period < b.period ? -1 : a.period > b.period ? 1 : 0));
+  const kept = entries.slice(-24);
+  return Object.fromEntries(kept.map((row) => [row.period, row.snapshot]));
+}
+
+export function normalizeDecisionHistory(items = []) {
+  if (!Array.isArray(items)) return [];
+  const actions = new Set(["confirmed", "skipped", "blocked", "override"]);
+  const sides = new Set(["buy", "sell"]);
+  const statuses = new Set(["ready", "warning", "preview", "blocked"]);
+  const rows = [];
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const digits = String(item.symbol || "").replace(/\D/g, "");
+    if (digits.length < 1 || digits.length > 6) continue;
+    const symbol = digits.padStart(6, "0");
+    const period = String(item.period || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(period)) continue;
+    const action = String(item.action || "").trim().toLowerCase();
+    if (!actions.has(action)) continue;
+    const side = sides.has(String(item.side || "").toLowerCase())
+      ? String(item.side).toLowerCase()
+      : "buy";
+    const policyStatus = String(item.policy_status || "").trim().toLowerCase();
+    const strategic = Number(item.strategic_amount);
+    const orderAmt = Number(item.order_amount);
+    const fee = Number(item.fee);
+    const premium = Number(item.premium_discount_pct);
+    const spread = Number(item.bid_ask_spread_pct);
+    const reasons = Array.isArray(item.policy_reasons)
+      ? item.policy_reasons.map((r) => String(r || "").trim()).filter(Boolean).slice(0, 12)
+      : [];
+    rows.push({
+      id: String(item.id || "").trim() || `dec_${period}_${symbol}_${action}`,
+      period,
+      symbol,
+      side,
+      action,
+      strategic_amount:
+        Number.isFinite(strategic) && strategic > 0 ? Math.round(strategic * 100) / 100 : 0,
+      order_amount: Number.isFinite(orderAmt) && orderAmt > 0 ? Math.round(orderAmt * 100) / 100 : 0,
+      fee: Number.isFinite(fee) && fee > 0 ? Math.round(fee * 100) / 100 : 0,
+      premium_discount_pct: Number.isFinite(premium) ? Math.round(premium * 10000) / 10000 : null,
+      bid_ask_spread_pct: Number.isFinite(spread) ? Math.round(spread * 10000) / 10000 : null,
+      policy_status: statuses.has(policyStatus) ? policyStatus : "",
+      policy_reasons: reasons,
+      signal_snapshot_id: String(item.signal_snapshot_id || "").trim() || null,
+      created_at: String(item.created_at || "").trim() || null,
+    });
+  }
+  rows.sort((a, b) => {
+    const at = String(a.created_at || "");
+    const bt = String(b.created_at || "");
+    if (at !== bt) return at < bt ? 1 : -1;
+    return a.id.localeCompare(b.id);
+  });
+  return rows.slice(0, 500);
+}
+
+export function normalizeExecutionDraftsMeta(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    synced_at: String(source.synced_at || source.syncedAt || "").trim() || null,
+    fingerprint: String(source.fingerprint || "").trim(),
+    signal_snapshot_id:
+      String(source.signal_snapshot_id || source.signalSnapshotId || "").trim() || null,
+  };
+}
+
+function normalizeDecisionSnapshot(value) {
+  if (!value || typeof value !== "object") return null;
+  const strategic = Number(value.strategic_amount);
+  const reasons = Array.isArray(value.policy_reasons)
+    ? value.policy_reasons.map((r) => String(r || "").trim()).filter(Boolean).slice(0, 12)
+    : [];
+  const status = String(value.policy_status || "").trim().toLowerCase();
+  return {
+    phase: String(value.phase || "").trim() || null,
+    strategic_amount:
+      Number.isFinite(strategic) && strategic > 0 ? Math.round(strategic * 100) / 100 : 0,
+    target_amount: nonnegative(value.target_amount, 0),
+    current_market_value: nonnegative(value.current_market_value, 0),
+    target_gap: nonnegative(value.target_gap, 0),
+    strategy: String(value.strategy || "").trim(),
+    band: String(value.band || "").trim(),
+    base_mult: Number.isFinite(Number(value.base_mult)) ? Number(value.base_mult) : null,
+    sentiment_mult: Number.isFinite(Number(value.sentiment_mult))
+      ? Number(value.sentiment_mult)
+      : null,
+    effective_mult: Number.isFinite(Number(value.effective_mult))
+      ? Number(value.effective_mult)
+      : null,
+    quote_price: nonnegative(value.quote_price, 0),
+    quote_as_of: value.quote_as_of != null ? String(value.quote_as_of) : null,
+    market_timestamp: value.market_timestamp != null ? String(value.market_timestamp) : null,
+    provider: value.provider != null ? String(value.provider) : null,
+    iopv: Number.isFinite(Number(value.iopv)) ? Number(value.iopv) : null,
+    premium_discount_pct: Number.isFinite(Number(value.premium_discount_pct))
+      ? Number(value.premium_discount_pct)
+      : null,
+    bid_ask_spread_pct: Number.isFinite(Number(value.bid_ask_spread_pct))
+      ? Number(value.bid_ask_spread_pct)
+      : null,
+    analysis_usable: value.analysis_usable == null ? true : Boolean(value.analysis_usable),
+    policy_status: ["ready", "warning", "preview", "blocked"].includes(status) ? status : "",
+    policy_reasons: reasons,
+    policy_fingerprint: String(value.policy_fingerprint || "").trim(),
+    signal_snapshot_id: String(value.signal_snapshot_id || "").trim() || null,
+    created_at: String(value.created_at || "").trim() || null,
+  };
+}
+
 export function normalizePlan(plan) {
   const base = {
     name: "默认定投计划",
@@ -109,6 +289,7 @@ export function normalizePlan(plan) {
     capital_base: 0,
     initial_target_pct: 0,
     initial_months: 1,
+    initial_build_started_at: null,
     initial_build_completed_at: null,
     cadence: "monthly",
     day: 1,
@@ -120,6 +301,8 @@ export function normalizePlan(plan) {
     trading_cost: normalizeTradingCost(null),
     pending_orders: {},
     cash_reserve: normalizeCashReserve(null),
+    execution_policy: normalizeExecutionPolicy(null),
+    signal_snapshots: {},
   };
   if (!plan || typeof plan !== "object") {
     return {
@@ -128,6 +311,8 @@ export function normalizePlan(plan) {
       strategy_overrides: {},
       add_plan: { ...DEFAULT_ADD_PLAN },
       cash_reserve: normalizeCashReserve(null),
+      execution_policy: normalizeExecutionPolicy(null),
+      signal_snapshots: {},
     };
   }
   let cadence = String(plan.cadence || base.cadence).toLowerCase();
@@ -151,6 +336,8 @@ export function normalizePlan(plan) {
         ? Math.min(100, initialTargetPct)
         : 0,
     initial_months: initialMonths,
+    initial_build_started_at:
+      String(plan.initial_build_started_at || "").trim() || null,
     initial_build_completed_at:
       String(plan.initial_build_completed_at || "").trim() || null,
     cadence,
@@ -165,6 +352,8 @@ export function normalizePlan(plan) {
     trading_cost: normalizeTradingCost(plan.trading_cost),
     pending_orders: normalizePendingOrders(plan.pending_orders),
     cash_reserve: normalizeCashReserve(plan.cash_reserve ?? plan.cashReserve),
+    execution_policy: normalizeExecutionPolicy(plan.execution_policy ?? plan.executionPolicy),
+    signal_snapshots: normalizeSignalSnapshots(plan.signal_snapshots ?? plan.signalSnapshots),
   };
 }
 
@@ -254,6 +443,7 @@ export function upsertSell(items, record) {
 }
 
 const DRAFT_STATUSES = new Set(["pending", "confirmed", "skipped"]);
+const READINESS_STATUSES = new Set(["ready", "warning", "preview", "blocked"]);
 
 export function normalizeExecutionDrafts(items = []) {
   if (!Array.isArray(items)) return [];
@@ -273,10 +463,27 @@ export function normalizeExecutionDrafts(items = []) {
     if (seen.has(id)) continue;
     seen.add(id);
     const suggested = Number(item.suggested_amount);
+    const orderAmt = Number(item.order_amount);
+    const totalCash = Number(item.total_cash);
     const price = Number(item.price);
     const shares = Number(item.shares);
     const fee = Number(item.fee);
     const side = String(item.side || "buy").trim().toLowerCase() === "sell" ? "sell" : "buy";
+    const decisionSnapshot = normalizeDecisionSnapshot(item.decision_snapshot);
+    const readinessRaw = String(item.readiness_status || decisionSnapshot?.policy_status || "").trim().toLowerCase();
+    const readiness_status = READINESS_STATUSES.has(readinessRaw)
+      ? readinessRaw
+      : status === "pending"
+        ? ""
+        : "ready";
+    const readiness_reasons = Array.isArray(item.readiness_reasons)
+      ? item.readiness_reasons.map((r) => String(r || "").trim()).filter(Boolean).slice(0, 12)
+      : decisionSnapshot?.policy_reasons || [];
+    // 旧 pending 草稿缺 decision_snapshot → stale，下次同步重建
+    const stale =
+      status === "pending" && !decisionSnapshot
+        ? true
+        : Boolean(item.stale);
     drafts.push({
       id,
       period,
@@ -284,6 +491,13 @@ export function normalizeExecutionDrafts(items = []) {
       name: String(item.name || "").trim(),
       side,
       suggested_amount: Number.isFinite(suggested) && suggested > 0 ? Math.round(suggested * 100) / 100 : 0,
+      order_amount:
+        Number.isFinite(orderAmt) && orderAmt > 0
+          ? Math.round(orderAmt * 100) / 100
+          : Number.isFinite(price) && Number.isFinite(shares) && price > 0 && shares > 0
+            ? Math.round(price * shares * 100) / 100
+            : 0,
+      total_cash: Number.isFinite(totalCash) && totalCash > 0 ? Math.round(totalCash * 100) / 100 : 0,
       price: Number.isFinite(price) && price > 0 ? Math.round(price * 1e6) / 1e6 : 0,
       shares: Number.isFinite(shares) && shares > 0 ? Math.round(shares * 1e4) / 1e4 : 0,
       fee: Number.isFinite(fee) && fee > 0 ? Math.round(fee * 100) / 100 : 0,
@@ -292,12 +506,15 @@ export function normalizeExecutionDrafts(items = []) {
       skip_reason: String(item.skip_reason || "").trim(),
       confirmed_trade_id: String(item.confirmed_trade_id || "").trim() || null,
       note: String(item.note || "").trim(),
+      readiness_status,
+      readiness_reasons,
+      stale,
+      decision_snapshot: decisionSnapshot,
     });
   }
   drafts.sort((a, b) => {
     if (a.period !== b.period) return a.period < b.period ? 1 : -1;
     if (a.symbol !== b.symbol) return a.symbol.localeCompare(b.symbol);
-    // 同品种卖出排在买入前，便于先见纪律项
     if (a.side !== b.side) return a.side === "sell" ? -1 : 1;
     return 0;
   });

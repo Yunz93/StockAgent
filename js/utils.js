@@ -28,7 +28,10 @@ export function aiProviderLabel(provider) {
 export function money(value, currency = "CNY", digits = 2) {
   if (value == null || Number.isNaN(Number(value))) return "—";
   const fractionDigits = Number.isFinite(Number(digits)) ? Math.max(0, Math.min(8, Number(digits))) : 2;
-  return `${CURRENCY[currency] || ""}${Number(value).toLocaleString("zh-CN", {
+  const factor = 10 ** fractionDigits;
+  let amount = Math.round(Number(value) * factor) / factor;
+  if (Object.is(amount, -0) || amount === 0) amount = 0;
+  return `${CURRENCY[currency] || ""}${amount.toLocaleString("zh-CN", {
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits,
   })}`;
