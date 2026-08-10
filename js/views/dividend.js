@@ -29,7 +29,6 @@ import { persistWorkspace } from "../workspace.js";
 import {
   orderActionLabel,
   positionGlance,
-  POSITION_DENOM_HINT,
 } from "../decision-status.js";
 
 let indexChartBound = false;
@@ -886,8 +885,6 @@ function holdingsPanel(symbol, price, advice, context) {
     targetWeight: position.targetWeight,
     actualWeight: position.actualWeight,
     drift: position.drift,
-    assetWeight: context.assetPositionPct,
-    poolPositionPct: advice?.execution?.currentPositionPct,
   });
   const rows = [
     ["仓位", glance.primary],
@@ -898,12 +895,8 @@ function holdingsPanel(symbol, price, advice, context) {
     ["市值", value != null ? money(value) : "—"],
     ["浮盈亏", pnl != null ? `${money(pnl)}（${signed(pnlPct, 1)}%）` : "—"],
   ];
-  if (glance.secondary) {
-    rows.splice(1, 0, ["口径", glance.secondary]);
-  }
   return `
     <div class="dividend-holdings">
-      <p class="muted dividend-position-hint">${escapeHtml(POSITION_DENOM_HINT)}</p>
       <dl class="dividend-holdings-grid">
         ${rows
           .map(

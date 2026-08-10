@@ -16,18 +16,21 @@ test("allocStatusChip maps buy and common skip reasons", () => {
   assert.ok(allocStatusHint("偏贵").includes("估值"));
 });
 
-test("positionGlance prefers pool structure and appends total-capital secondary", () => {
+test("positionGlance shows current pool weight and drift only", () => {
   const glance = positionGlance({
     targetWeight: 40,
     actualWeight: 45.2,
     drift: 5.2,
-    assetWeight: 12.1,
-    poolPositionPct: 30,
   });
-  assert.match(glance.primary, /池内 45\.2%/);
-  assert.match(glance.primary, /目标 40\.0%/);
-  assert.match(glance.secondary, /总仓 12\.1%/);
-  assert.match(glance.secondary, /池总仓 30\.0%/);
+  assert.equal(glance.primary, "45.2%（+5.2pp）");
+  assert.equal(glance.secondary, undefined);
+
+  assert.equal(positionGlance({ actualWeight: 12 }).primary, "12.0%");
+  assert.equal(positionGlance({ targetWeight: 30 }).primary, "目标 30.0%");
+  assert.equal(
+    positionGlance({ actualWeight: 52.8, targetWeight: 30 }).primary,
+    "52.8%（+22.8pp）",
+  );
 });
 
 test("orderActionLabel stays aligned with alloc chips", () => {
