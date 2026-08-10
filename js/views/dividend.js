@@ -1169,8 +1169,8 @@ function paintDividend() {
         ${holdingsCardHtml(advice, context)}
         ${addPlan}
       </div>
-      ${metricsCardHtml()}
       ${scoreCardHtml()}
+      ${metricsCardHtml()}
     </div>
     <div class="decision-detail-grid">
       ${vehicleQualityHtml(context)}
