@@ -41,40 +41,37 @@ export function allocStatusHint(chip) {
 }
 
 /**
- * 仓位一眼读：默认只讲池内结构；总仓作括号补充。
- * @returns {{ primary: string, secondary: string }}
+ * 仓位一眼读：只标当前池内比例与相对目标的偏移。
+ * @returns {{ primary: string }}
  */
 export function positionGlance({
   targetWeight = null,
   actualWeight = null,
   drift = null,
-  assetWeight = null,
-  poolPositionPct = null,
 } = {}) {
   const fmt = (value, digits = 1) =>
     value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : null;
   const target = fmt(targetWeight);
   const actual = fmt(actualWeight);
-  const driftText =
+  let driftText =
     drift != null && Number.isFinite(Number(drift))
       ? `${Number(drift) > 0 ? "+" : ""}${Number(drift).toFixed(1)}pp`
       : null;
-
-  let primary = "—";
-  if (actual != null && target != null) {
-    primary = `池内 ${actual}%（目标 ${target}%${driftText ? ` · ${driftText}` : ""}）`;
-  } else if (actual != null) {
-    primary = `池内 ${actual}%`;
-  } else if (target != null) {
-    primary = `目标 ${target}%`;
+  if (
+    driftText == null &&
+    actualWeight != null &&
+    targetWeight != null &&
+    Number.isFinite(Number(actualWeight)) &&
+    Number.isFinite(Number(targetWeight))
+  ) {
+    const d = Number(actualWeight) - Number(targetWeight);
+    driftText = `${d > 0 ? "+" : ""}${d.toFixed(1)}pp`;
   }
 
-  const bits = [];
-  const asset = fmt(assetWeight);
-  const pool = fmt(poolPositionPct);
-  if (asset != null) bits.push(`总仓 ${asset}%`);
-  if (pool != null) bits.push(`池总仓 ${pool}%`);
-  return { primary, secondary: bits.join(" · ") };
+  if (actual != null && driftText) return { primary: `${actual}%（${driftText}）` };
+  if (actual != null) return { primary: `${actual}%` };
+  if (target != null) return { primary: `目标 ${target}%` };
+  return { primary: "—" };
 }
 
 /**
@@ -103,5 +100,3 @@ export function orderActionLabel({
   if (hasAmount) return "攒一手";
   return "不投";
 }
-
-export const POSITION_DENOM_HINT = "偏离看池内；总仓看本金";
