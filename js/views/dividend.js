@@ -31,6 +31,7 @@ import {
   positionGlance,
   POSITION_DENOM_HINT,
 } from "../decision-status.js";
+import { judgmentArrow, judgmentTone } from "../metric-judgment.js";
 
 let indexChartBound = false;
 const forceInefficientBySymbol = new Set();
@@ -48,6 +49,14 @@ function currentPayload() {
 function fmt(value, digits = 2, suffix = "") {
   if (value == null || Number.isNaN(Number(value))) return "—";
   return `${Number(value).toFixed(digits)}${suffix}`;
+}
+
+function valueWithJudgmentArrow(valueHtml, label) {
+  const arrow = judgmentArrow(label);
+  if (!arrow || !valueHtml || valueHtml === "—") return valueHtml;
+  const tone = judgmentTone(label);
+  const cls = tone ? ` class="metric-judgment ${tone}"` : ` class="metric-judgment"`;
+  return `${valueHtml}<em${cls} title="${escapeAttr(label || "")}">${arrow}</em>`;
 }
 
 function fmtSigned(value, digits = 2, suffix = "") {
@@ -262,8 +271,8 @@ function metricsHtml() {
       }
     : {
         label: "股债利差",
-        value: fmt(spread.value, 2),
-        sub: `股息 ${fmt(valuation.dividend_yield_pct, 2, "%")} / 国债 ${fmt(bond.yield10y, 2, "%")}<br><span class="metric-sub-keep">${escapeHtml(spread.label || "—")}</span>`,
+        value: valueWithJudgmentArrow(fmt(spread.value, 2), spread.label),
+        sub: `股息 ${fmt(valuation.dividend_yield_pct, 2, "%")} / 国债 ${fmt(bond.yield10y, 2, "%")}`,
       };
   const cards = [
     valuationCard,
@@ -280,13 +289,16 @@ function metricsHtml() {
     },
     {
       label: "RSI(14)",
-      value: fmt(technicals.rsi14, 0),
-      sub: escapeHtml(technicals.rsi_label || "—"),
+      value: valueWithJudgmentArrow(fmt(technicals.rsi14, 0), technicals.rsi_label),
+      sub: "",
     },
     {
       label: "KDJ(9,3,3)",
-      value: `K ${fmt(kdj.k, 0)} · D ${fmt(kdj.d, 0)} · J ${fmt(kdj.j, 0)}`,
-      sub: escapeHtml(technicals.kdj_label || "—"),
+      value: valueWithJudgmentArrow(
+        `K ${fmt(kdj.k, 0)} · D ${fmt(kdj.d, 0)} · J ${fmt(kdj.j, 0)}`,
+        technicals.kdj_label,
+      ),
+      sub: "",
     },
   ];
   return cards
@@ -295,7 +307,7 @@ function metricsHtml() {
         <div class="metric-card dividend-metric" style="--stagger:${index}">
           <span>${card.label}</span>
           <strong>${card.value}</strong>
-          <small class="muted">${card.sub}</small>
+          ${card.sub ? `<small class="muted">${card.sub}</small>` : ""}
         </div>
       `,
     )

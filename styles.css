@@ -2732,10 +2732,6 @@ button:active {
   line-height: 1.35;
 }
 
-.metric-sub-keep {
-  white-space: nowrap;
-}
-
 .dividend-metric strong {
   font-size: 20px;
 }
@@ -2745,6 +2741,12 @@ button:active {
   font-size: 13px;
   margin-left: 4px;
   font-family: var(--font-sans);
+}
+
+.dividend-metric strong em.metric-judgment {
+  font-size: 0.9em;
+  font-weight: 700;
+  vertical-align: 0.05em;
 }
 
 .decision-secondary {
