@@ -1859,7 +1859,7 @@ button:active {
   flex-direction: column;
 }
 
-/* 上排：本期结论 | 持仓(+分档)；下排：关键指标 | 综合评分 */
+/* 上排：本期结论 | 持仓(+分档)；下排：综合评分 | 关键指标 */
 .dividend-hero > .dividend-conclusion-card,
 .dividend-hero > .dividend-advice {
   grid-column: 1;
@@ -1878,12 +1878,12 @@ button:active {
   align-self: stretch;
 }
 
-.dividend-hero > .dividend-metrics-card {
+.dividend-hero > .dividend-score-card {
   grid-column: 1;
   grid-row: 2;
 }
 
-.dividend-hero > .dividend-score-card {
+.dividend-hero > .dividend-metrics-card {
   grid-column: 2;
   grid-row: 2;
 }
@@ -2726,10 +2726,6 @@ button:active {
   line-height: 1.35;
 }
 
-.metric-sub-keep {
-  white-space: nowrap;
-}
-
 .dividend-metric strong {
   font-size: 20px;
 }
@@ -2739,6 +2735,12 @@ button:active {
   font-size: 13px;
   margin-left: 4px;
   font-family: var(--font-sans);
+}
+
+.dividend-metric strong em.metric-judgment {
+  font-size: 0.9em;
+  font-weight: 700;
+  vertical-align: 0.05em;
 }
 
 .decision-secondary {
