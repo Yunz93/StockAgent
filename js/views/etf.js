@@ -865,6 +865,13 @@ function activateBuysTab() {
   if (tab) tab.click();
 }
 
+function activateHomeExec() {
+  callRenderer("switchView", "home");
+  queueMicrotask(() => {
+    els.execDraftPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
 async function requestPortfolioAiReview({ force = false } = {}) {
   const ready = isPortfolioAiReady();
   if (!ready.ok) {
