@@ -18,7 +18,6 @@ import { applyIndexExposureGroups } from "./index-exposure.js";
 import {
   allocStatusChip,
   allocStatusHint,
-  POSITION_DENOM_HINT,
 } from "./decision-status.js";
 
 function cacheKey(symbol) {
@@ -317,7 +316,6 @@ export function poolAllocationHtml({ highlightSymbol = null, clickable = true } 
           })
           .join("")}
       </div>
-      <p class="muted pool-alloc-denom-hint">${escapeHtml(POSITION_DENOM_HINT)}</p>
       ${progressNote}
       ${portfolioReviewResultHtml(state.aiPortfolioReview)}
     </section>

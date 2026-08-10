@@ -37,7 +37,6 @@ import {
 } from "../strategy.js";
 import { entryMetrics, overviewGlanceLine, portfolioTotals } from "../etf-portfolio.js";
 import { confirmDraftIntoLedger, settlePlanAfterDrafts } from "../trade-apply.js";
-import { POSITION_DENOM_HINT } from "../decision-status.js";
 
 const ROW_STRATEGY_OPTIONS = Object.freeze([
   { value: "", label: "跟随全局" },
@@ -566,7 +565,7 @@ function renderMetrics() {
   if (!els.etfMetrics) return;
   const capitalBase = Math.max(0, Number(state.plan?.capital_base) || 0);
   const line = overviewGlanceLine({ capitalBase });
-  els.etfMetrics.textContent = state.etfs.length ? `${line} · ${POSITION_DENOM_HINT}` : "";
+  els.etfMetrics.textContent = state.etfs.length ? line : "";
   els.etfMetrics.hidden = !state.etfs.length;
 }
 
