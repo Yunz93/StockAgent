@@ -34,7 +34,7 @@ export async function init() {
     ensureMarketSentiment({ refresh: false }).catch(() => {}),
     ensureGoldMacro({ refresh: false }).catch(() => {}),
   ]);
-  switchView("etf");
+  switchView("home");
 }
 
 init();

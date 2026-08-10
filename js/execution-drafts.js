@@ -127,6 +127,46 @@ export function buildExecutionDraftsFromAllocation({ now = new Date() } = {}) {
   return normalizeExecutionDrafts([...otherPeriods, ...kept, ...created]);
 }
 
+/**
+ * 单标的卖出纪律建议：与执行清单同源规则；附带本期草稿状态（若已生成）。
+ * @returns {null | object}
+ */
+export function sellSuggestionForSymbol(symbol, { now = new Date(), preferLive = null } = {}) {
+  const code = String(symbol || "").trim();
+  if (!code) return null;
+  const plan = state.plan || {};
+  const period = planPeriod(plan, now);
+  const rawHoldings = buildPoolHoldingsForAllocation({ preferLive: preferLive || null });
+  const holdings = prepareHoldingsForAllocation(rawHoldings).map((item) => {
+    const etf = (state.etfs || []).find((row) => row.symbol === item.symbol);
+    return {
+      ...item,
+      shares: Math.max(0, Number(etf?.shares) || 0) || undefined,
+    };
+  });
+  const live =
+    buildRebalanceSellSuggestions({
+      holdings,
+      quotes: state.quotesBySymbol,
+      plan,
+      now,
+    }).find((row) => row.symbol === code) || null;
+  if (!live) return null;
+  const draft =
+    normalizeExecutionDrafts(state.executionDrafts || []).find(
+      (item) =>
+        item.period === period.start &&
+        item.symbol === code &&
+        item.side === "sell" &&
+        item.status !== "skipped",
+    ) || null;
+  return {
+    ...live,
+    draftId: draft?.id || null,
+    draftStatus: draft?.status || null,
+  };
+}
+
 export function currentPeriodDrafts(now = new Date()) {
   const period = planPeriod(state.plan || {}, now);
   return normalizeExecutionDrafts(state.executionDrafts || []).filter(

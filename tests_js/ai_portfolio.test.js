@@ -64,8 +64,9 @@ test("portfolioReviewResultHtml shows changed amounts once and avoids idle chrom
       ],
     },
   });
-  assert.match(html, /红利超配/);
+  assert.match(html, /建议略降红利份额/);
   assert.match(html, /规则 ¥1,200\.00 → ¥900\.00/);
+  assert.ok(!html.includes("ai-review-focus"));
   assert.ok(!html.includes("沪深300：规则")); // 未变更不列
   assert.match(html, /仅供研究参考/);
 });

@@ -98,7 +98,7 @@ export function buildRebalanceSellSuggestions({
           sellToWeight: target + 5,
           rule: "valuation_trim",
           band: "估值止盈",
-          hint: `高出目标 ${drift.toFixed(1)} pp，成长类漂移止盈`,
+          hint: `高出目标 ${drift.toFixed(1)}%，成长类漂移止盈`,
         });
       }
     } else if (drift > 10 && rich) {
@@ -106,7 +106,7 @@ export function buildRebalanceSellSuggestions({
         sellToWeight: target + 5,
         rule: "valuation_trim",
         band: "估值止盈",
-        hint: `高出目标 ${drift.toFixed(1)} pp 且估值偏贵，止盈至目标+5pp`,
+        hint: `高出目标 ${drift.toFixed(1)}% 且估值偏贵，止盈至目标+5%`,
       });
     }
     if (isJanuary && drift > 10) {
@@ -114,7 +114,7 @@ export function buildRebalanceSellSuggestions({
         sellToWeight: target,
         rule: "annual_rebalance",
         band: "年度再平衡",
-        hint: `1 月硬再平衡：高出目标 ${drift.toFixed(1)} pp，卖回目标仓位`,
+        hint: `1 月硬再平衡：高出目标 ${drift.toFixed(1)}%，卖回目标仓位`,
       });
     }
     if (!candidates.length) continue;

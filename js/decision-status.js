@@ -42,7 +42,7 @@ export function allocStatusHint(chip) {
 
 /**
  * 仓位一眼读：只标当前池内比例与相对目标的偏移。
- * @returns {{ primary: string }}
+ * @returns {{ primary: string, primaryHtml?: string, driftTone?: string }}
  */
 export function positionGlance({
   targetWeight = null,
@@ -53,22 +53,31 @@ export function positionGlance({
     value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : null;
   const target = fmt(targetWeight);
   const actual = fmt(actualWeight);
-  let driftText =
-    drift != null && Number.isFinite(Number(drift))
-      ? `${Number(drift) > 0 ? "+" : ""}${Number(drift).toFixed(1)}pp`
-      : null;
-  if (
-    driftText == null &&
+  let driftValue = null;
+  if (drift != null && Number.isFinite(Number(drift))) {
+    driftValue = Number(drift);
+  } else if (
     actualWeight != null &&
     targetWeight != null &&
     Number.isFinite(Number(actualWeight)) &&
     Number.isFinite(Number(targetWeight))
   ) {
-    const d = Number(actualWeight) - Number(targetWeight);
-    driftText = `${d > 0 ? "+" : ""}${d.toFixed(1)}pp`;
+    driftValue = Number(actualWeight) - Number(targetWeight);
   }
+  const driftText =
+    driftValue != null
+      ? `${driftValue > 0 ? "+" : ""}${driftValue.toFixed(1)}%`
+      : null;
+  const driftTone = driftValue > 0 ? "up" : driftValue < 0 ? "down" : "";
 
-  if (actual != null && driftText) return { primary: `${actual}%（${driftText}）` };
+  if (actual != null && driftText) {
+    const primary = `${actual}%（${driftText}）`;
+    return {
+      primary,
+      primaryHtml: `${actual}%（<span class="${driftTone}">${driftText}</span>）`,
+      driftTone,
+    };
+  }
   if (actual != null) return { primary: `${actual}%` };
   if (target != null) return { primary: `目标 ${target}%` };
   return { primary: "—" };

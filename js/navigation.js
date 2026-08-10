@@ -9,16 +9,21 @@ export function switchView(view) {
       openAnalysis(symbol);
       return;
     }
-    view = "etf";
+    view = "home";
   }
-  if (!PAGE_TITLES[view]) view = "etf";
+  if (!PAGE_TITLES[view]) view = "home";
   state.activeView = view;
   if (view !== "dividend") state.analysisSymbol = null;
   document.querySelectorAll(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
   document.querySelectorAll(".view").forEach((section) => section.classList.toggle("active", section.id === `${view}View`));
   if (els.pageTitle) els.pageTitle.textContent = PAGE_TITLES[view] || "ETF Agent";
+  if (els.pageSubtitle) {
+    els.pageSubtitle.hidden = true;
+    if (els.pageSubtitleText) els.pageSubtitleText.textContent = "";
+    else els.pageSubtitle.textContent = "";
+  }
   document.querySelector(`#${view}View`)?.scrollIntoView({ block: "start" });
-  if (view === "etf") renderEtfPool();
+  if (view === "home" || view === "etf") renderEtfPool();
   if (view === "settings") renderSettings();
   renderSidebarEtfs();
   closeMobileSidebar();
@@ -130,11 +135,10 @@ export function applyTheme(theme) {
   localStorage.setItem(THEME_KEY, theme);
   if (els.themeToggle) {
     els.themeToggle.setAttribute("aria-label", theme === "dark" ? "切换到明亮模式" : "切换到暗黑模式");
-    const icon = els.themeToggle.querySelector(".theme-icon");
-    if (icon) icon.textContent = theme === "dark" ? "☀" : "☾";
+    els.themeToggle.setAttribute("title", theme === "dark" ? "切换到明亮模式" : "切换到暗黑模式");
   }
   if (state.activeView === "dividend") renderDividend();
-  if (state.activeView === "etf") renderEtfPool();
+  if (state.activeView === "home" || state.activeView === "etf") renderEtfPool();
 }
 
 export function themeChartColors() {

@@ -70,7 +70,7 @@ export const state = {
   selectedEtf: null,
   priceRange: "1y",
   indexChartRange: "1y",
-  activeView: "etf",
+  activeView: "home",
   // 分析页当前 ETF 代码；由侧栏池条目打开
   analysisSymbol: null,
   analysisCache: {}, // symbolKey -> payload
@@ -130,6 +130,8 @@ export const els = {};
 export function initEls() {
   Object.assign(els, {
     pageTitle: document.querySelector("#pageTitle"),
+    pageSubtitle: document.querySelector("#pageSubtitle"),
+    pageSubtitleText: document.querySelector("#pageSubtitleText"),
     topSourceStatus: document.querySelector("#topSourceStatus"),
     themeToggle: document.querySelector("#themeToggle"),
     sidebarToggle: document.querySelector("#sidebarToggle"),
@@ -139,8 +141,6 @@ export function initEls() {
 
     dividendStatus: document.querySelector("#dividendStatus"),
     dividendContent: document.querySelector("#dividendContent"),
-    dividendSectionTitle: document.querySelector("#dividendSectionTitle"),
-    dividendLede: document.querySelector("#dividendLede"),
 
     dcaPlanForm: document.querySelector("#dcaPlanForm"),
     planName: document.querySelector("#planName"),
@@ -180,7 +180,8 @@ export function initEls() {
     etfFormStatus: document.querySelector("#etfFormStatus"),
     etfMetrics: document.querySelector("#etfMetrics"),
     poolAllocPanel: document.querySelector("#poolAllocPanel"),
-    overviewEmptyGuide: document.querySelector("#overviewEmptyGuide"),
+    overviewEmptyGuide: document.querySelector("#homeEmptyGuide"),
+    homeEmptyGuide: document.querySelector("#homeEmptyGuide"),
     etfRows: document.querySelector("#etfRows"),
     etfEmpty: document.querySelector("#etfEmpty"),
     importSeedPool: document.querySelector("#importSeedPool"),
@@ -202,7 +203,6 @@ export function initEls() {
     buyEmpty: document.querySelector("#buyEmpty"),
     execDraftPanel: document.querySelector("#execDraftPanel"),
     etfRefresh: document.querySelector("#etfRefresh"),
-    etfQuoteStatus: document.querySelector("#etfQuoteStatus"),
     etfChartPanel: document.querySelector("#etfChartPanel"),
     etfChartTitle: document.querySelector("#etfChartTitle"),
     etfChartSummary: document.querySelector("#etfChartSummary"),

@@ -22,14 +22,19 @@ test("positionGlance shows current pool weight and drift only", () => {
     actualWeight: 45.2,
     drift: 5.2,
   });
-  assert.equal(glance.primary, "45.2%（+5.2pp）");
+  assert.equal(glance.primary, "45.2%（+5.2%）");
+  assert.equal(glance.primaryHtml, '45.2%（<span class="up">+5.2%</span>）');
+  assert.equal(glance.driftTone, "up");
   assert.equal(glance.secondary, undefined);
 
   assert.equal(positionGlance({ actualWeight: 12 }).primary, "12.0%");
   assert.equal(positionGlance({ targetWeight: 30 }).primary, "目标 30.0%");
+  const heavy = positionGlance({ actualWeight: 52.8, targetWeight: 30 });
+  assert.equal(heavy.primary, "52.8%（+22.8%）");
+  assert.equal(heavy.primaryHtml, '52.8%（<span class="up">+22.8%</span>）');
   assert.equal(
-    positionGlance({ actualWeight: 52.8, targetWeight: 30 }).primary,
-    "52.8%（+22.8pp）",
+    positionGlance({ actualWeight: 20, targetWeight: 30 }).primaryHtml,
+    '20.0%（<span class="down">-10.0%</span>）',
   );
 });
 

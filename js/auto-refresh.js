@@ -30,7 +30,7 @@ async function refreshCurrentView() {
     await Promise.all([renderDividend({ force: true }), sentiment, goldMacro]);
     return;
   }
-  if (state.activeView === "etf") {
+  if (state.activeView === "etf" || state.activeView === "home") {
     await Promise.all([renderEtfPool({ refresh: true }), sentiment, goldMacro]);
     return;
   }
