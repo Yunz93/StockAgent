@@ -2,7 +2,7 @@
  * 决策状态统一语言：分配芯片、不买原因、仓位一眼读。
  */
 
-/** @typedef {"可买"|"偏贵"|"攒一手"|"已满"|"等行情"|"无目标"|"不投"} AllocChip */
+/** @typedef {"可买"|"偏贵"|"等待合适时机"|"已满"|"等行情"|"无目标"|"不投"} AllocChip */
 
 /**
  * @param {{ amount?: number, band?: string, reason?: string }} row
@@ -15,7 +15,7 @@ export function allocStatusChip({ amount = 0, band = "", reason = "" } = {}) {
   if (/无目标/.test(text)) return "无目标";
   if (/已达目标|已满/.test(text)) return "已满";
   if (/偏贵|高估|不建议|暂停|留现金/.test(text)) return "偏贵";
-  if (/不足|一手|经济/.test(text)) return "攒一手";
+  if (/不足|一手|经济/.test(text)) return "等待合适时机";
   if (/不投|跳过|skip/i.test(text)) return "不投";
   return "不投";
 }
@@ -27,7 +27,7 @@ export function allocStatusHint(chip) {
       return "本期建议买入";
     case "偏贵":
       return "估值偏高，额度让出或留现金";
-    case "攒一手":
+    case "等待合适时机":
       return "金额不足整手/手续费门槛";
     case "已满":
       return "已达建仓目标金额";
@@ -101,11 +101,11 @@ export function orderActionLabel({
     const base = `${inefficient ? "仍可买" : "可买"} ${Number(shares).toLocaleString("zh-CN")} 份`;
     return overweight ? `${base} · 已超目标` : base;
   }
-  if (blockedReason === "fee_inefficient") return "攒一手";
+  if (blockedReason === "fee_inefficient") return "等待合适时机";
   if (blockedReason === "fee_rate_exceeds_limit") return "费率超限";
   if (blockedReason === "insufficient_lot") {
-    return initial ? "攒一手（余量下期）" : "攒一手";
+    return initial ? "等待合适时机（余量下期）" : "等待合适时机";
   }
-  if (hasAmount) return "攒一手";
+  if (hasAmount) return "等待合适时机";
   return "不投";
 }

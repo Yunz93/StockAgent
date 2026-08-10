@@ -98,11 +98,277 @@ def normalize_pending_orders(payload):
     return result
 
 
+
+def _nonnegative_or_default(value, fallback):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return number if number >= 0 else fallback
+
+
+def normalize_execution_policy(payload):
+    base = dict(DEFAULT_WORKSPACE["plan"]["execution_policy"])
+    source = payload if isinstance(payload, dict) else {}
+    return {
+        "premium_warn_pct": _nonnegative_or_default(
+            source.get("premium_warn_pct"), base["premium_warn_pct"]
+        ),
+        "premium_block_pct": _nonnegative_or_default(
+            source.get("premium_block_pct"), base["premium_block_pct"]
+        ),
+        "discount_warn_pct": _nonnegative_or_default(
+            source.get("discount_warn_pct"), base["discount_warn_pct"]
+        ),
+        "discount_block_pct": _nonnegative_or_default(
+            source.get("discount_block_pct"), base["discount_block_pct"]
+        ),
+        "spread_warn_pct": _nonnegative_or_default(
+            source.get("spread_warn_pct"), base["spread_warn_pct"]
+        ),
+        "spread_block_pct": _nonnegative_or_default(
+            source.get("spread_block_pct"), base["spread_block_pct"]
+        ),
+        "quote_max_age_minutes": max(
+            1,
+            int(
+                round(
+                    _nonnegative_or_default(
+                        source.get("quote_max_age_minutes"), base["quote_max_age_minutes"]
+                    )
+                )
+            ),
+        ),
+        "pe_hysteresis_pp": _nonnegative_or_default(
+            source.get("pe_hysteresis_pp"), base["pe_hysteresis_pp"]
+        ),
+        "allow_warning_override": (
+            base["allow_warning_override"]
+            if source.get("allow_warning_override") is None
+            else bool(source.get("allow_warning_override"))
+        ),
+    }
+
+
+def normalize_signal_holding(row):
+    if not isinstance(row, dict):
+        return None
+
+    def opt_float(key, digits=4):
+        try:
+            number = float(row.get(key))
+        except (TypeError, ValueError):
+            return None
+        if not (number == number):  # NaN
+            return None
+        return round(number, digits)
+
+    band_index = row.get("band_index")
+    try:
+        band_index = int(band_index) if band_index is not None else None
+    except (TypeError, ValueError):
+        band_index = None
+    strategy = str(row.get("strategy") or "").strip().lower()
+    if strategy and strategy not in STRATEGY_IDS:
+        strategy = None
+    return {
+        "pe_pct": opt_float("pe_pct"),
+        "grade": str(row["grade"]).upper() if row.get("grade") is not None else None,
+        "asset_class": str(row["asset_class"]) if row.get("asset_class") is not None else None,
+        "spread_pct": opt_float("spread_pct"),
+        "bias_pct": opt_float("bias_pct"),
+        "sentiment_market": (
+            str(row["sentiment_market"]) if row.get("sentiment_market") is not None else None
+        ),
+        "sentiment_score": opt_float("sentiment_score", 6),
+        "base_mult": opt_float("base_mult", 3),
+        "sentiment_mult": opt_float("sentiment_mult", 3),
+        "effective_mult": opt_float("effective_mult", 3),
+        "band": str(row["band"]) if row.get("band") is not None else None,
+        "band_index": band_index,
+        "data_as_of": str(row["data_as_of"]) if row.get("data_as_of") is not None else None,
+        "analysis_usable": True if row.get("analysis_usable") is None else bool(row.get("analysis_usable")),
+        "index_code": str(row["index_code"]) if row.get("index_code") is not None else None,
+        "strategy": strategy,
+    }
+
+
+def normalize_signal_snapshots(payload):
+    if not isinstance(payload, dict):
+        return {}
+    entries = []
+    for raw_key, raw in payload.items():
+        period = str(raw_key or "").strip()
+        if len(period) != 10 or period[4] != "-" or period[7] != "-":
+            continue
+        if not isinstance(raw, dict):
+            continue
+        holdings_in = raw.get("holdings") if isinstance(raw.get("holdings"), dict) else {}
+        holdings = {}
+        for sym_raw, row in holdings_in.items():
+            digits = "".join(ch for ch in str(sym_raw or "") if ch.isdigit())
+            symbol = digits.zfill(6)
+            if len(symbol) != 6 or not digits:
+                continue
+            normalized = normalize_signal_holding(row)
+            if normalized:
+                holdings[symbol] = normalized
+        strategy = str(raw.get("strategy") or "valuation").strip().lower()
+        if strategy not in STRATEGY_IDS:
+            strategy = "valuation"
+        entries.append(
+            (
+                period,
+                {
+                    "id": str(raw.get("id") or "").strip() or f"sig_{period}",
+                    "period": period,
+                    "created_at": str(raw.get("created_at") or "").strip() or None,
+                    "strategy": strategy,
+                    "strategy_config": normalize_strategy_config(raw.get("strategy_config")),
+                    "holdings": holdings,
+                    "config_fingerprint": str(raw.get("config_fingerprint") or "").strip(),
+                },
+            )
+        )
+    entries.sort(key=lambda item: item[0])
+    kept = entries[-24:]
+    return {period: snapshot for period, snapshot in kept}
+
+
+def normalize_decision_history(payload):
+    if not isinstance(payload, list):
+        return []
+    actions = {"confirmed", "skipped", "blocked", "override"}
+    sides = {"buy", "sell"}
+    statuses = {"ready", "warning", "preview", "blocked"}
+    rows = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        digits = "".join(ch for ch in str(item.get("symbol") or "") if ch.isdigit())
+        symbol = digits.zfill(6)
+        if len(symbol) != 6 or not digits:
+            continue
+        period = str(item.get("period") or "").strip()
+        if len(period) != 10 or period[4] != "-" or period[7] != "-":
+            continue
+        action = str(item.get("action") or "").strip().lower()
+        if action not in actions:
+            continue
+        side = str(item.get("side") or "buy").strip().lower()
+        if side not in sides:
+            side = "buy"
+        policy_status = str(item.get("policy_status") or "").strip().lower()
+        reasons = []
+        for reason in item.get("policy_reasons") or []:
+            text = str(reason or "").strip()
+            if text:
+                reasons.append(text)
+            if len(reasons) >= 12:
+                break
+        strategic = _positive_number(item.get("strategic_amount"))
+        order_amount = _positive_number(item.get("order_amount"))
+        fee = _nonnegative_number(item.get("fee"))
+        try:
+            premium = float(item.get("premium_discount_pct"))
+        except (TypeError, ValueError):
+            premium = None
+        try:
+            spread = float(item.get("bid_ask_spread_pct"))
+        except (TypeError, ValueError):
+            spread = None
+        rows.append(
+            {
+                "id": str(item.get("id") or "").strip() or f"dec_{period}_{symbol}_{action}",
+                "period": period,
+                "symbol": symbol,
+                "side": side,
+                "action": action,
+                "strategic_amount": round(strategic, 2),
+                "order_amount": round(order_amount, 2),
+                "fee": round(fee, 2),
+                "premium_discount_pct": round(premium, 4) if premium is not None else None,
+                "bid_ask_spread_pct": round(spread, 4) if spread is not None else None,
+                "policy_status": policy_status if policy_status in statuses else "",
+                "policy_reasons": reasons,
+                "signal_snapshot_id": str(item.get("signal_snapshot_id") or "").strip() or None,
+                "created_at": str(item.get("created_at") or "").strip() or None,
+            }
+        )
+    rows.sort(key=lambda row: (row.get("created_at") or "", row["id"]), reverse=True)
+    return rows[:500]
+
+
+def normalize_execution_drafts_meta(payload):
+    source = payload if isinstance(payload, dict) else {}
+    return {
+        "synced_at": str(source.get("synced_at") or source.get("syncedAt") or "").strip() or None,
+        "fingerprint": str(source.get("fingerprint") or "").strip(),
+        "signal_snapshot_id": (
+            str(source.get("signal_snapshot_id") or source.get("signalSnapshotId") or "").strip()
+            or None
+        ),
+    }
+
+
+def normalize_decision_snapshot(payload):
+    if not isinstance(payload, dict):
+        return None
+    reasons = []
+    for reason in payload.get("policy_reasons") or []:
+        text = str(reason or "").strip()
+        if text:
+            reasons.append(text)
+        if len(reasons) >= 12:
+            break
+    status = str(payload.get("policy_status") or "").strip().lower()
+    if status not in ("ready", "warning", "preview", "blocked"):
+        status = ""
+
+    def opt_num(key):
+        try:
+            number = float(payload.get(key))
+        except (TypeError, ValueError):
+            return None
+        return number
+
+    return {
+        "phase": str(payload.get("phase") or "").strip() or None,
+        "strategic_amount": round(_positive_number(payload.get("strategic_amount")), 2),
+        "target_amount": round(_nonnegative_number(payload.get("target_amount")), 2),
+        "current_market_value": round(_nonnegative_number(payload.get("current_market_value")), 2),
+        "target_gap": round(_nonnegative_number(payload.get("target_gap")), 2),
+        "strategy": str(payload.get("strategy") or "").strip(),
+        "band": str(payload.get("band") or "").strip(),
+        "base_mult": opt_num("base_mult"),
+        "sentiment_mult": opt_num("sentiment_mult"),
+        "effective_mult": opt_num("effective_mult"),
+        "quote_price": round(_nonnegative_number(payload.get("quote_price")), 6),
+        "quote_as_of": str(payload["quote_as_of"]) if payload.get("quote_as_of") is not None else None,
+        "market_timestamp": (
+            str(payload["market_timestamp"]) if payload.get("market_timestamp") is not None else None
+        ),
+        "provider": str(payload["provider"]) if payload.get("provider") is not None else None,
+        "iopv": opt_num("iopv"),
+        "premium_discount_pct": opt_num("premium_discount_pct"),
+        "bid_ask_spread_pct": opt_num("bid_ask_spread_pct"),
+        "analysis_usable": (
+            True if payload.get("analysis_usable") is None else bool(payload.get("analysis_usable"))
+        ),
+        "policy_status": status,
+        "policy_reasons": reasons,
+        "policy_fingerprint": str(payload.get("policy_fingerprint") or "").strip(),
+        "signal_snapshot_id": str(payload.get("signal_snapshot_id") or "").strip() or None,
+        "created_at": str(payload.get("created_at") or "").strip() or None,
+    }
+
+
 def normalize_execution_drafts(payload):
     if not isinstance(payload, list):
         return []
     seen = set()
     drafts = []
+    readiness_statuses = {"ready", "warning", "preview", "blocked"}
     for item in payload:
         if not isinstance(item, dict):
             continue
@@ -124,6 +390,8 @@ def normalize_execution_drafts(payload):
             continue
         seen.add(draft_id)
         suggested = _positive_number(item.get("suggested_amount"))
+        order_amount = _positive_number(item.get("order_amount"))
+        total_cash = _positive_number(item.get("total_cash"))
         price = _positive_number(item.get("price"))
         shares = _positive_number(item.get("shares"))
         fee = _nonnegative_number(item.get("fee"))
@@ -131,6 +399,27 @@ def normalize_execution_drafts(payload):
         side = str(item.get("side") or "buy").strip().lower()
         if side not in ("buy", "sell"):
             side = "buy"
+        decision_snapshot = normalize_decision_snapshot(item.get("decision_snapshot"))
+        readiness_raw = str(
+            item.get("readiness_status")
+            or ((decision_snapshot or {}).get("policy_status") if decision_snapshot else "")
+            or ""
+        ).strip().lower()
+        readiness_status = readiness_raw if readiness_raw in readiness_statuses else (
+            "" if status == "pending" else "ready"
+        )
+        readiness_reasons = []
+        for reason in item.get("readiness_reasons") or (
+            (decision_snapshot or {}).get("policy_reasons") if decision_snapshot else []
+        ) or []:
+            text_reason = str(reason or "").strip()
+            if text_reason:
+                readiness_reasons.append(text_reason)
+            if len(readiness_reasons) >= 12:
+                break
+        stale = True if (status == "pending" and not decision_snapshot) else bool(item.get("stale"))
+        if not order_amount and price > 0 and shares > 0:
+            order_amount = round(price * shares, 2)
         drafts.append(
             {
                 "id": draft_id,
@@ -139,6 +428,8 @@ def normalize_execution_drafts(payload):
                 "name": str(item.get("name") or "").strip(),
                 "side": side,
                 "suggested_amount": round(suggested, 2),
+                "order_amount": round(order_amount, 2),
+                "total_cash": round(total_cash, 2),
                 "price": round(price, 6),
                 "shares": round(shares, 4),
                 "fee": round(fee, 2),
@@ -147,6 +438,10 @@ def normalize_execution_drafts(payload):
                 "skip_reason": str(item.get("skip_reason") or "").strip(),
                 "confirmed_trade_id": confirmed,
                 "note": str(item.get("note") or "").strip(),
+                "readiness_status": readiness_status,
+                "readiness_reasons": readiness_reasons,
+                "stale": stale,
+                "decision_snapshot": decision_snapshot,
             }
         )
     drafts.sort(
@@ -154,6 +449,7 @@ def normalize_execution_drafts(payload):
         reverse=True,
     )
     return drafts
+
 
 
 def normalize_etf_entry(item):
@@ -338,6 +634,8 @@ def normalize_plan(payload):
             "strategy_overrides": {},
             "add_plan": normalize_add_plan(base.get("add_plan")),
             "cash_reserve": normalize_cash_reserve(base.get("cash_reserve")),
+            "execution_policy": normalize_execution_policy(base.get("execution_policy")),
+            "signal_snapshots": {},
         }
     name = str(payload.get("name") or base["name"]).strip() or base["name"]
     cadence = str(payload.get("cadence") or base["cadence"]).strip().lower()
@@ -371,6 +669,9 @@ def normalize_plan(payload):
         "initial_months": _clamp_initial_months(
             payload.get("initial_months", payload.get("initialMonths"))
         ),
+        "initial_build_started_at": (
+            str(payload.get("initial_build_started_at") or "").strip() or None
+        ),
         "initial_build_completed_at": (
             str(payload.get("initial_build_completed_at") or "").strip() or None
         ),
@@ -384,6 +685,16 @@ def normalize_plan(payload):
         "trading_cost": normalize_trading_cost(payload.get("trading_cost")),
         "pending_orders": normalize_pending_orders(payload.get("pending_orders")),
         "cash_reserve": normalize_cash_reserve(payload.get("cash_reserve")),
+        "execution_policy": normalize_execution_policy(
+            payload.get("execution_policy")
+            if payload.get("execution_policy") is not None
+            else payload.get("executionPolicy")
+        ),
+        "signal_snapshots": normalize_signal_snapshots(
+            payload.get("signal_snapshots")
+            if payload.get("signal_snapshots") is not None
+            else payload.get("signalSnapshots")
+        ),
     }
 
 
@@ -458,6 +769,10 @@ def normalize_workspace(payload):
     workspace["etfs"] = etfs
     workspace["plan"] = normalize_plan(payload.get("plan"))
     workspace["execution_drafts"] = normalize_execution_drafts(payload.get("execution_drafts"))
+    workspace["execution_drafts_meta"] = normalize_execution_drafts_meta(
+        payload.get("execution_drafts_meta")
+    )
+    workspace["decision_history"] = normalize_decision_history(payload.get("decision_history"))
 
     buys = []
     seen_buy_ids = set()
@@ -484,7 +799,7 @@ def normalize_workspace(payload):
     if isinstance(payload.get("prefs"), dict):
         workspace["prefs"] = payload["prefs"]
 
-    workspace["version"] = 8
+    workspace["version"] = 9
     workspace["updated_at"] = payload.get("updated_at") or as_of(None)
     return workspace
 

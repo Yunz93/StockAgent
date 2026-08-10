@@ -137,8 +137,9 @@
             <p class="muted">先导入种子池或到定投计划添加 ETF，再生成今日执行清单。</p>
             <button class="primary-button" type="button" data-import-seed-pool>导入默认种子池</button>
           </div>
-          <div id="poolAllocPanel" class="pool-alloc-home"></div>
+          <div id="homeTodayCard" class="home-today-card" hidden></div>
           <div id="execDraftPanel" class="exec-draft-panel" hidden></div>
+          <div id="homeConfirmSheet" class="home-confirm-sheet" hidden></div>
         </section>
 
         <section id="dividendView" class="view">
@@ -214,8 +215,8 @@
                 <div class="plan-config-group">
                   <div class="plan-config-group-heading">
                     <h4>初期建仓</h4>
-                    <p id="planInitialSummary" class="muted"></p>
                   </div>
+                  <div id="planInitialSummary" class="plan-initial-progress" hidden></div>
                   <label>
                     <span>可投资总资金（元）</span>
                     <input id="planCapitalBase" type="number" min="0" step="any" placeholder="100000" />

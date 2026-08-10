@@ -5,7 +5,9 @@ import {
   chooseWorkspaceSource,
   normalizeBuys,
   normalizeCashReserve,
+  normalizeDecisionHistory,
   normalizeExecutionDrafts,
+  normalizeExecutionDraftsMeta,
   normalizeSells,
   normalizePlan,
   normalizeWorkspaceEntries,
@@ -13,6 +15,7 @@ import {
   planPersistenceScore,
   upsertBuy,
   upsertSell,
+  WORKSPACE_VERSION,
 } from "../js/workspace_model.js";
 
 test("workspace source prefers server, then local cache, then defaults", () => {
@@ -280,4 +283,9 @@ test("execution drafts normalize and migrate from missing field", () => {
   assert.equal(drafts[1].id, "draft_2026-07-01_512890");
   assert.equal(drafts[1].side, "buy"); // 缺省兼容旧数据
   assert.equal(drafts[1].date, "2026-07-01");
+  assert.equal(drafts[1].stale, true);
+  assert.equal(WORKSPACE_VERSION, 9);
+  assert.equal(normalizePlan({}).execution_policy.premium_block_pct, 5);
+  assert.deepEqual(normalizeExecutionDraftsMeta(null).fingerprint, "");
+  assert.equal(normalizeDecisionHistory([]).length, 0);
 });

@@ -412,12 +412,15 @@ function aiAnalysisSectionsHtml(proposal) {
 function aiReviewHtml(advice, context) {
   const enabled = appConfig?.ai?.enabled === true;
   const review = currentAIReview();
+  const aiDisclaimer =
+    '<p class="muted ai-review-title-note">AI 分析仅供研究参考，不构成投资建议。</p>';
   if (!enabled) {
     return `
       <section class="panel-block ai-review-card ai-guide-card is-disabled" aria-label="AI 分析">
         <div class="panel-heading">
           <div>
             <h2 class="section-title">AI 分析</h2>
+            ${aiDisclaimer}
           </div>
           <span class="muted">未启用</span>
         </div>
@@ -429,7 +432,7 @@ function aiReviewHtml(advice, context) {
   if (review?.status === "loading") {
     return `
       <section class="panel-block ai-review-card is-loading" aria-live="polite">
-        <div class="panel-heading"><div><h2 class="section-title">AI 分析</h2></div></div>
+        <div class="panel-heading"><div><h2 class="section-title">AI 分析</h2>${aiDisclaimer}</div></div>
         <p class="muted ai-review-status">正在识别 ETF 的关键矛盾，请稍候…</p>
       </section>
     `;
@@ -438,7 +441,7 @@ function aiReviewHtml(advice, context) {
     return `
       <section class="panel-block ai-review-card is-error">
         <div class="panel-heading">
-          <div><h2 class="section-title">AI 分析</h2></div>
+          <div><h2 class="section-title">AI 分析</h2>${aiDisclaimer}</div>
           <button class="ghost-button compact" data-ai-review type="button">重试</button>
         </div>
         <p class="down ai-review-status">${escapeHtml(review.error)}</p>
@@ -453,6 +456,7 @@ function aiReviewHtml(advice, context) {
         <div class="panel-heading">
           <div>
             <h2 class="section-title">AI 分析</h2>
+            ${aiDisclaimer}
           </div>
           <button class="primary-button compact" data-ai-review type="button">开始分析</button>
         </div>
@@ -472,13 +476,13 @@ function aiReviewHtml(advice, context) {
     pause: "暂停",
   };
   const confidenceLabels = { low: "低", medium: "中", high: "高" };
-  const focusTitle = proposal.focus_title || proposal.summary || "当前决策重点";
   const watchItems = [...(proposal.watch_items || []), ...(proposal.conditions_to_reverse || [])];
   return `
     <section class="panel-block ai-review-card" aria-label="AI 分析">
       <div class="panel-heading">
         <div>
           <h2 class="section-title">AI 分析</h2>
+          ${aiDisclaimer}
           <p class="muted">${escapeHtml(aiProviderLabel(result.provider))} · ${escapeHtml(result.model)}${result.cached ? " · 缓存" : ""}</p>
         </div>
         <button class="ghost-button compact" data-ai-review data-force="true" type="button">重新分析</button>
@@ -489,20 +493,14 @@ function aiReviewHtml(advice, context) {
         <div><span>风控后额度</span><strong>${money(correctedAmount)}</strong></div>
         <div><span>可信度</span><strong>${escapeHtml(confidenceLabels[proposal.confidence] || "—")}</strong></div>
       </div>
-      <div class="ai-review-focus">
-        <span>本只重点</span>
-        <strong>${escapeHtml(focusTitle)}</strong>
-      </div>
       <p class="ai-review-headline">${escapeHtml(proposal.summary || "模型未提供摘要")}</p>
       ${aiAnalysisSectionsHtml(proposal)}
       ${watchItems.length ? `<div class="ai-review-watch"><strong>后续观察</strong>${aiListHtml(watchItems)}</div>` : ""}
-      <p class="muted">本地风控：${escapeHtml((policy.reasons || []).join("；"))}</p>
       <div class="ai-review-choice" role="group" aria-label="选择本期参考建议">
         <button class="${useCorrection ? "primary-button" : "ghost-button"} compact" data-ai-choice="corrected" type="button">采用 AI 分析</button>
         <button class="${useCorrection ? "ghost-button" : "primary-button"} compact" data-ai-choice="baseline" type="button">保持规则建议</button>
         <strong>当前参考：${money(displayedAmount)}</strong>
       </div>
-      <p class="muted ai-review-disclaimer">${escapeHtml(result.disclaimer || "")}</p>
     </section>
   `;
 }
@@ -800,7 +798,7 @@ function executionPanelHtml(advice, context) {
         order.blockedReason === "fee_inefficient" && forcedPreview?.shares > 0
           ? `<div class="decision-execution-force">
               <p class="muted">最小 ${order.minimumEfficientShares.toLocaleString("zh-CN")} 份 · 仍买 ${forcedPreview.shares.toLocaleString("zh-CN")} 份约 ${fmt(forcedPreview.feeRatioPct, 3)}%</p>
-              <button class="ghost-button compact" type="button" data-force-inefficient="${escapeAttr(symbol)}">仍然买入</button>
+              <button class="ghost-button compact" type="button" data-force-inefficient="${escapeAttr(symbol)}">等不及了</button>
             </div>`
           : order.inefficient
             ? `<div class="decision-execution-force">

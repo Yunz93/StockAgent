@@ -13,6 +13,21 @@ import {
 } from "../js/execution-drafts.js";
 import { normalizePlan } from "../js/workspace_model.js";
 
+function liveQuote(price, extra = {}) {
+  return {
+    price,
+    market_timestamp: new Date().toISOString(),
+    product_quality: {
+      premium_discount_pct: 0.1,
+      bid_ask_spread_pct: 0.05,
+      iopv: price,
+      ...(extra.product_quality || {}),
+    },
+    ...extra,
+  };
+}
+
+
 test("execution draft normalization pads symbols and drops invalid rows", () => {
   const drafts = normalizeExecutionDrafts([
     {
@@ -48,8 +63,8 @@ test("buildExecutionDraftsFromAllocation creates lot-sized pending drafts", () =
     { symbol: "510300", name: "沪深300ETF", shares: 0, target_weight: 40 },
   ];
   state.quotesBySymbol = {
-    "512890": { price: 1.0 },
-    "510300": { price: 4.0 },
+    "512890": liveQuote(1.0),
+    "510300": liveQuote(4.0),
   };
   state.analysisCache = {
     "512890": { supported: true, valuation: { pe_percentile_10y: 0.15 }, score: { grade: "A" }, asset_class: "dividend" },
@@ -100,8 +115,8 @@ test("buildExecutionDraftsFromAllocation includes sell-side drafts when overweig
     { symbol: "510300", name: "沪深300ETF", shares: 15000, target_weight: 80, cost: 4 },
   ];
   state.quotesBySymbol = {
-    "512890": { price: 1.0 },
-    "510300": { price: 4.0 },
+    "512890": liveQuote(1.0),
+    "510300": liveQuote(4.0),
   };
   // 512890 MV 40000 / total 100000 = 40% vs target 20%, pe rich
   state.analysisCache = {
@@ -148,8 +163,8 @@ test("sellSuggestionForSymbol mirrors checklist sell advice for the ETF detail",
     { symbol: "510300", name: "沪深300ETF", shares: 15000, target_weight: 80, cost: 4 },
   ];
   state.quotesBySymbol = {
-    "512890": { price: 1.0 },
-    "510300": { price: 4.0 },
+    "512890": liveQuote(1.0),
+    "510300": liveQuote(4.0),
   };
   state.analysisCache = {
     "512890": {
@@ -200,7 +215,7 @@ test("sellSuggestionForSymbol mirrors checklist sell advice for the ETF detail",
 
 test("updateExecutionDraft preserves confirmed rows when regenerating", () => {
   state.etfs = [{ symbol: "512890", name: "红利低波ETF", shares: 0, target_weight: 100 }];
-  state.quotesBySymbol = { "512890": { price: 1.0 } };
+  state.quotesBySymbol = { "512890": liveQuote(1.0) };
   state.analysisCache = {
     "512890": { supported: true, valuation: { pe_percentile_10y: 0.15 }, score: { grade: "A" } },
   };
@@ -335,4 +350,44 @@ test("cash reserve books sell proceeds and release over budget", () => {
   assert.ok(released);
   assert.equal(released.cash_reserve.history.some((row) => row.type === "release"), true);
   assert.equal(released.cash_reserve.balance, 3500); // 5000 - (2500-1000)
+});
+
+test("executionDraftSummary splits buy cash and sell proceeds", async () => {
+  const { executionDraftFingerprint, executionDraftSummary } = await import("../js/execution-drafts.js");
+  state.plan = normalizePlan({
+    amount: 2000,
+    cadence: "monthly",
+    day: 1,
+  });
+  state.executionDrafts = [
+    {
+      id: "draft_2026-08-01_512890",
+      period: "2026-08-01",
+      symbol: "512890",
+      side: "buy",
+      price: 1,
+      shares: 1000,
+      fee: 5,
+      status: "pending",
+      date: "2026-08-10",
+    },
+    {
+      id: "draft_2026-08-01_510300_sell",
+      period: "2026-08-01",
+      symbol: "510300",
+      side: "sell",
+      price: 4,
+      shares: 200,
+      fee: 5,
+      status: "pending",
+      date: "2026-08-10",
+    },
+  ];
+  const summary = executionDraftSummary(new Date("2026-08-10"));
+  assert.equal(summary.pendingBuys.length, 1);
+  assert.equal(summary.pendingSells.length, 1);
+  assert.equal(summary.buyCash, 1005);
+  assert.equal(summary.sellProceeds, 795);
+  assert.match(executionDraftFingerprint(summary.drafts), /buy:512890/);
+  assert.match(executionDraftFingerprint(summary.drafts), /sell:510300/);
 });

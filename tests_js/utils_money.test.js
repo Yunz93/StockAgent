@@ -13,3 +13,8 @@ test("money supports 3 decimal places for ETF trade prices", () => {
   assert.equal(money(1.2, "CNY", 3), "¥1.200");
   assert.equal(money(0.605, "CNY", 3), "¥0.605");
 });
+
+test("money does not show a minus for zero-ish values", () => {
+  assert.equal(money(-0), "¥0.00");
+  assert.equal(money(-0.004), "¥0.00");
+});

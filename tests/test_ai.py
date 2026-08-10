@@ -449,7 +449,8 @@ class AIPolicyTests(unittest.TestCase):
             },
             "512890",
         )
-        self.assertEqual(snapshot["execution_budget"], 5000)
+        # 尚缺 20000 ÷ 剩余 6 个月
+        self.assertAlmostEqual(snapshot["execution_budget"], 20000 / 6, places=2)
 
     def test_reduce_action_cannot_raise_amount(self):
         policy = apply_policy(

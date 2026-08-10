@@ -10,20 +10,25 @@ import {
   chooseWorkspaceSource,
   clampWeight,
   normalizeBuys,
+  normalizeDecisionHistory,
   normalizeExecutionDrafts,
+  normalizeExecutionDraftsMeta,
   normalizeSells,
   normalizePlan,
   normalizeWorkspaceEntries,
+  WORKSPACE_VERSION,
 } from "./workspace_model.js";
 
 export function buildWorkspacePayload() {
   return {
-    version: 8,
+    version: WORKSPACE_VERSION,
     etfs: state.etfs,
     buys: state.buys,
     sells: state.sells,
     plan: state.plan,
     execution_drafts: state.executionDrafts || [],
+    execution_drafts_meta: normalizeExecutionDraftsMeta(state.execDraftsMeta || {}),
+    decision_history: normalizeDecisionHistory(state.decisionHistory || []),
     prefs: {},
     updated_at: new Date().toISOString(),
   };
@@ -55,6 +60,8 @@ function applyWorkspace(payload, source) {
   state.sells = normalizeSells(payload.sells || []);
   state.plan = normalizePlan(payload.plan);
   state.executionDrafts = normalizeExecutionDrafts(payload.execution_drafts || []);
+  state.execDraftsMeta = normalizeExecutionDraftsMeta(payload.execution_drafts_meta || {});
+  state.decisionHistory = normalizeDecisionHistory(payload.decision_history || []);
   state.workspaceSync.source = source;
   return true;
 }
@@ -72,6 +79,8 @@ function seedDefaultPool() {
   state.buys = [];
   state.sells = [];
   state.executionDrafts = [];
+  state.execDraftsMeta = normalizeExecutionDraftsMeta(null);
+  state.decisionHistory = [];
   state.plan = normalizePlan(null);
   state.workspaceSync.source = "default-pool";
 }

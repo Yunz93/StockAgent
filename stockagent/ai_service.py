@@ -512,7 +512,20 @@ def _position_snapshot(raw, workspace, symbol=""):
     initial_gap = max(0.0, target_amount - current_value)
     cadence = str(plan.get("cadence") or "monthly").strip().lower()
     periods = 4 if cadence == "weekly" else 2 if cadence == "biweekly" else 1
-    period_installment = (target_amount / initial_months) / periods if initial_months else target_amount
+    # 剩余缺口 ÷ 剩余月数（无起始戳时按全长月数）；逾期剩 1 个月打满。
+    started_raw = str(plan.get("initial_build_started_at") or "").strip()
+    months_left = initial_months
+    if started_raw:
+        try:
+            started = datetime.datetime.fromisoformat(started_raw.replace("Z", "+00:00"))
+            now = datetime.datetime.now(started.tzinfo) if started.tzinfo else datetime.datetime.now()
+            elapsed = (now.year - started.year) * 12 + (now.month - started.month)
+            if now.day < started.day:
+                elapsed -= 1
+            months_left = max(1, initial_months - max(0, elapsed))
+        except ValueError:
+            months_left = initial_months
+    period_installment = (initial_gap / months_left) / periods if months_left else initial_gap
     initial_budget = min(initial_gap, period_installment)
     allowed_budget = (
         initial_budget
