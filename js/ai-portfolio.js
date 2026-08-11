@@ -85,6 +85,7 @@ export function portfolioReviewResultHtml(review) {
   if (!result) return "";
   const proposal = result.ai_proposal || {};
   const changed = (result.final_allocations || []).filter((row) => row.changed);
+  const headline = proposal.summary || "模型未提供摘要";
   // 摘要已承载主结论；旁路只补新信息（分节、修正明细、观察、限制）
   const adjustmentsHtml = changed.length
     ? `<div class="ai-portfolio-adjustments" aria-label="建议修正">
@@ -107,11 +108,17 @@ export function portfolioReviewResultHtml(review) {
           }</p>
         </div>
       </div>
-      <p class="ai-review-headline">${escapeHtml(proposal.summary || "模型未提供摘要")}</p>
-      ${sectionsHtml(proposal)}
-      ${adjustmentsHtml}
-      ${listBlock("后续观察", proposal.watch_items)}
-      ${listBlock("数据限制", proposal.data_limitations)}
-      <p class="muted ai-review-disclaimer">${escapeHtml(result.disclaimer || "")}</p>
+      <details class="ai-result-fold" open>
+        <summary class="ai-result-fold-summary">
+          <span class="ai-result-fold-headline">${escapeHtml(headline)}</span>
+        </summary>
+        <div class="ai-result-fold-body">
+          ${sectionsHtml(proposal)}
+          ${adjustmentsHtml}
+          ${listBlock("后续观察", proposal.watch_items)}
+          ${listBlock("数据限制", proposal.data_limitations)}
+          <p class="muted ai-review-disclaimer">${escapeHtml(result.disclaimer || "")}</p>
+        </div>
+      </details>
     </section>`;
 }

@@ -477,6 +477,7 @@ function aiReviewHtml(advice, context) {
   };
   const confidenceLabels = { low: "低", medium: "中", high: "高" };
   const watchItems = [...(proposal.watch_items || []), ...(proposal.conditions_to_reverse || [])];
+  const headline = proposal.summary || "模型未提供摘要";
   return `
     <section class="panel-block ai-review-card" aria-label="AI 分析">
       <div class="panel-heading">
@@ -493,9 +494,15 @@ function aiReviewHtml(advice, context) {
         <div><span>风控后额度</span><strong>${money(correctedAmount)}</strong></div>
         <div><span>可信度</span><strong>${escapeHtml(confidenceLabels[proposal.confidence] || "—")}</strong></div>
       </div>
-      <p class="ai-review-headline">${escapeHtml(proposal.summary || "模型未提供摘要")}</p>
-      ${aiAnalysisSectionsHtml(proposal)}
-      ${watchItems.length ? `<div class="ai-review-watch"><strong>后续观察</strong>${aiListHtml(watchItems)}</div>` : ""}
+      <details class="ai-result-fold" open>
+        <summary class="ai-result-fold-summary">
+          <span class="ai-result-fold-headline">${escapeHtml(headline)}</span>
+        </summary>
+        <div class="ai-result-fold-body">
+          ${aiAnalysisSectionsHtml(proposal)}
+          ${watchItems.length ? `<div class="ai-review-watch"><strong>后续观察</strong>${aiListHtml(watchItems)}</div>` : ""}
+        </div>
+      </details>
       <div class="ai-review-choice" role="group" aria-label="选择本期参考建议">
         <button class="${useCorrection ? "primary-button" : "ghost-button"} compact" data-ai-choice="corrected" type="button">采用 AI 分析</button>
         <button class="${useCorrection ? "ghost-button" : "primary-button"} compact" data-ai-choice="baseline" type="button">保持规则建议</button>

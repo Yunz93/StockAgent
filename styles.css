@@ -2624,6 +2624,69 @@ button:active {
   padding-left: 1.2em;
 }
 
+.ai-result-fold {
+  margin: 0;
+}
+
+.ai-result-fold-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.ai-result-fold-summary::-webkit-details-marker {
+  display: none;
+}
+
+.ai-result-fold-summary::marker {
+  content: "";
+}
+
+.ai-result-fold-headline {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.45;
+  color: var(--ink);
+  text-wrap: pretty;
+}
+
+.ai-result-fold:not([open]) .ai-result-fold-headline {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.ai-result-fold-summary::after {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--line) 55%, var(--surface));
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 24px;
+  content: "收起";
+}
+
+.ai-result-fold:not([open]) > .ai-result-fold-summary::after {
+  content: "展开";
+}
+
+.ai-result-fold-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed color-mix(in oklab, var(--line) 80%, transparent);
+}
+
 .pool-alloc-metric {
   display: flex;
   flex-direction: column;
@@ -4465,6 +4528,129 @@ button:active {
   margin: 0;
 }
 
+.home-returns-panel {
+  margin: 12px 0 0;
+}
+
+.home-returns-block > .panel-heading {
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.home-returns-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.home-returns-metrics .pool-alloc-metric:nth-child(3n) {
+  border-right: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+}
+
+.home-returns-metrics .pool-alloc-metric:nth-child(4n) {
+  border-right: 0;
+}
+
+.home-returns-metrics .pool-alloc-metric:nth-last-child(-n + 3) {
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+}
+
+.home-returns-metrics .pool-alloc-metric:nth-last-child(-n + 4) {
+  border-bottom: 0;
+}
+
+.home-returns-empty {
+  margin: 0;
+}
+
+.home-returns-table {
+  display: grid;
+  gap: 0;
+  border: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+  border-radius: var(--radius-md, 10px);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.home-returns-head,
+.home-returns-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+}
+
+.home-returns-head {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+  background: color-mix(in oklab, var(--surface-2) 88%, var(--surface));
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+}
+
+.home-returns-row + .home-returns-row {
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.home-returns-index {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.home-returns-index strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.home-returns-index .muted {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-returns-table .num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-size: 13px;
+}
+
+.home-returns-chart {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+}
+
+.home-returns-chart-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.home-returns-chart-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 650;
+}
+
+.home-returns-chart-summary {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+}
+
+.home-equity-chart-shell {
+  min-height: 280px;
+}
+
+.home-equity-chart-shell canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
 .home-today-block > .panel-heading {
   align-items: flex-start;
   gap: 12px;
@@ -4583,6 +4769,42 @@ button:active {
 
   .home-today-metrics .pool-alloc-metric:nth-last-child(-n + 2) {
     border-bottom: 0;
+  }
+
+  .home-returns-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .home-returns-metrics .pool-alloc-metric:nth-child(4n) {
+    border-right: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+  }
+
+  .home-returns-metrics .pool-alloc-metric:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .home-returns-metrics .pool-alloc-metric:nth-last-child(-n + 4) {
+    border-bottom: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+  }
+
+  .home-returns-metrics .pool-alloc-metric:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+
+  .home-returns-head,
+  .home-returns-row {
+    grid-template-columns: minmax(0, 1.2fr) repeat(3, minmax(0, 0.9fr));
+    gap: 6px;
+    padding: 10px;
+  }
+
+  .home-returns-chart-heading {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .home-returns-chart-heading .range-segment {
+    overflow-x: auto;
   }
 
   .home-today-block > .panel-heading {

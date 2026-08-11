@@ -54,7 +54,14 @@ import {
   STRATEGY_PRESETS,
   strategySummary,
 } from "../strategy.js";
-import { entryMetrics, overviewGlanceLine, portfolioTotals } from "../etf-portfolio.js";
+import { entryMetrics, overviewGlanceLine, portfolioReturnsByIndex, portfolioTotals } from "../etf-portfolio.js";
+import {
+  HOME_EQUITY_PERIODS,
+  buildDailyEquityCurve,
+  equityDataFingerprint,
+  prepareEquityChartPoints,
+  symbolsForEquityCurve,
+} from "../portfolio-equity.js";
 
 const ROW_STRATEGY_OPTIONS = Object.freeze([
   { value: "", label: "跟随全局" },
@@ -882,10 +889,12 @@ async function requestPortfolioAiReview({ force = false } = {}) {
   if (!pool) {
     state.aiPortfolioReview = { status: "error", error: "请先配置周期预算与目标仓位" };
     renderHomeTodayCard();
+    renderHomeReturnsPanel();
     return;
   }
   state.aiPortfolioReview = { status: "loading" };
   renderHomeTodayCard();
+  renderHomeReturnsPanel();
   try {
     const response = await fetch("/api/ai/review-portfolio", {
       method: "POST",
@@ -907,6 +916,7 @@ async function requestPortfolioAiReview({ force = false } = {}) {
     };
   }
   renderHomeTodayCard();
+  renderHomeReturnsPanel();
 }
 
 function bindDraftActions(root) {
@@ -932,6 +942,7 @@ function bindDraftActions(root) {
       }
       syncHomeExecutionDrafts({ persist: true });
       renderHomeTodayCard();
+      renderHomeReturnsPanel();
       renderExecDraftPanel();
     });
   });
@@ -1035,6 +1046,7 @@ function ensureFreshQuotesForHomeDrafts() {
       homeQuoteRefreshInFlight = null;
     }
     renderHomeTodayCard();
+    renderHomeReturnsPanel();
     renderExecDraftPanel({ skipQuoteRefresh: true });
   })();
   return homeQuoteRefreshInFlight;
@@ -1289,6 +1301,7 @@ function openHomeConfirmSheet(id) {
       if (statusEl) statusEl.textContent = "交易条件已变化，请重新确认";
       syncHomeExecutionDrafts({ persist: true });
       renderHomeTodayCard();
+      renderHomeReturnsPanel();
       renderExecDraftPanel();
       return;
     }
@@ -1338,6 +1351,7 @@ function openHomeConfirmSheet(id) {
       persistWorkspace();
       syncHomeExecutionDrafts({ persist: true });
       renderHomeTodayCard();
+      renderHomeReturnsPanel();
       renderExecDraftPanel();
       renderPoolAllocation();
       renderMetrics();
@@ -1405,6 +1419,7 @@ function skipExecutionDraft(id) {
   if (confirmingDraftId === id) closeHomeConfirmSheet();
   renderPoolAllocation();
   renderHomeTodayCard();
+  renderHomeReturnsPanel();
   renderExecDraftPanel();
 }
 
@@ -1465,9 +1480,280 @@ function renderHomeTodayCard() {
     reevaluatePeriodStrategy();
     persistWorkspace();
     renderHomeTodayCard();
+    renderHomeReturnsPanel();
     renderExecDraftPanel();
     renderPoolAllocation();
   });
+}
+
+function pnlToneClass(pnl) {
+  if (!(Number.isFinite(Number(pnl)))) return "";
+  if (pnl > 0) return "up";
+  if (pnl < 0) return "down";
+  return "";
+}
+
+function formatReturnCell(pnl, pnlPct) {
+  if (pnl == null) return "—";
+  const pct = pnlPct != null ? `（${signed(pnlPct, 1)}%）` : "";
+  return `${money(pnl)}${pct}`;
+}
+
+function homeEquityPeriodButtonsHtml(activePeriod) {
+  return HOME_EQUITY_PERIODS.map(
+    (item) =>
+      `<button class="segment-button js-home-equity-period${
+        item.id === activePeriod ? " active" : ""
+      }" data-period="${item.id}" type="button">${item.label}</button>`,
+  ).join("");
+}
+
+function homeEquityChartBlockHtml(period) {
+  return `
+    <div class="home-returns-chart" aria-label="收益走势">
+      <div class="home-returns-chart-heading">
+        <div>
+          <h4 class="home-returns-chart-title">收益走势</h4>
+          <p class="muted home-returns-chart-summary" id="homeEquityChartSummary">加载走势…</p>
+        </div>
+        <div class="range-segment" role="group" aria-label="收益走势粒度">
+          ${homeEquityPeriodButtonsHtml(period)}
+        </div>
+      </div>
+      <div class="price-chart-shell home-equity-chart-shell">
+        <canvas id="homeEquityChart" width="960" height="320" aria-label="组合收益折线图"></canvas>
+        <div class="price-tooltip" id="homeEquityChartTooltip" hidden></div>
+      </div>
+    </div>
+  `;
+}
+
+function bindHomeEquityPeriodButtons(root) {
+  root?.querySelectorAll(".js-home-equity-period").forEach((button) => {
+    button.addEventListener("click", () => {
+      const period = button.dataset.period;
+      if (!period || period === state.homeEquityPeriod) return;
+      state.homeEquityPeriod = period;
+      root.querySelectorAll(".js-home-equity-period").forEach((node) => {
+        node.classList.toggle("active", node.dataset.period === period);
+      });
+      void refreshHomeEquityChart({ forceRedraw: true });
+    });
+  });
+}
+
+async function fetchHomeEquityHistories(symbols, fingerprint) {
+  const range = state.homeEquityHistory?.range || "5y";
+  state.homeEquityHistory = {
+    ...state.homeEquityHistory,
+    status: "loading",
+    fingerprint,
+    range,
+    error: null,
+  };
+  const bySymbol = {};
+  const errors = [];
+  await Promise.all(
+    symbols.map(async (symbol) => {
+      try {
+        const response = await fetch(
+          `/api/history?symbol=${encodeURIComponent(symbol)}&range=${encodeURIComponent(range)}`,
+        );
+        const payload = await response.json();
+        bySymbol[symbol] = { points: payload.points || [], error: payload.error || null };
+        if (payload.error && !(payload.points || []).length) errors.push(`${symbol}: ${payload.error}`);
+      } catch (error) {
+        bySymbol[symbol] = { points: [], error: String(error?.message || error) };
+        errors.push(`${symbol}: ${error?.message || error}`);
+      }
+    }),
+  );
+  if (equityDataFingerprint(state.etfs, state.buys, state.sells) !== fingerprint) {
+    return null;
+  }
+  state.homeEquityHistory = {
+    status: "ready",
+    fingerprint,
+    range,
+    bySymbol,
+    error: errors.length ? errors.slice(0, 3).join("；") : null,
+    fetchedAt: Date.now(),
+  };
+  return state.homeEquityHistory;
+}
+
+function drawHomeEquityChartFromCache() {
+  const canvas = document.querySelector("#homeEquityChart");
+  const tooltip = document.querySelector("#homeEquityChartTooltip");
+  const summaryEl = document.querySelector("#homeEquityChartSummary");
+  if (!canvas) return;
+
+  const cache = state.homeEquityHistory || {};
+  const period = state.homeEquityPeriod || "month";
+  const periodLabel = HOME_EQUITY_PERIODS.find((item) => item.id === period)?.label || period;
+
+  if (cache.status === "loading") {
+    if (summaryEl) summaryEl.textContent = "加载走势…";
+    drawPriceChart(canvas, tooltip, [], [], "CNY", null);
+    return;
+  }
+
+  const daily = buildDailyEquityCurve({
+    buys: state.buys,
+    sells: state.sells,
+    etfs: state.etfs,
+    historyBySymbol: cache.bySymbol || {},
+  });
+  const points = prepareEquityChartPoints(daily, period);
+
+  if (!points.length) {
+    const err = cache.error || (cache.status === "error" ? "行情不可用" : null);
+    if (summaryEl) {
+      summaryEl.textContent = err ? `走势暂不可用：${err}` : "暂无足够的历史价格，无法绘制走势";
+    }
+    drawPriceChart(canvas, tooltip, [], [], "CNY", err);
+    return;
+  }
+
+  const first = points[0];
+  const last = points[points.length - 1];
+  const pnlDelta = (last.pnl ?? last.close) - (first.pnl ?? first.close);
+  if (summaryEl) {
+    const hint = cache.error ? ` · 部分品种：${cache.error}` : "";
+    summaryEl.textContent = `${periodLabel} · ${first.date} → ${last.date} · 盈亏 ${money(
+      last.pnl ?? last.close,
+    )} · 区间 ${money(pnlDelta)}${hint}`;
+  }
+  drawPriceChart(canvas, tooltip, points, [{ key: "cost", label: "0", value: 0 }], "CNY", null);
+}
+
+async function refreshHomeEquityChart({ forceRedraw = false } = {}) {
+  if (!els.homeReturnsPanel || els.homeReturnsPanel.hidden) return;
+  if (!document.querySelector("#homeEquityChart")) return;
+
+  const symbols = symbolsForEquityCurve(state.etfs, state.buys, state.sells);
+  const fingerprint = equityDataFingerprint(state.etfs, state.buys, state.sells);
+  const cache = state.homeEquityHistory || {};
+
+  if (!symbols.length) {
+    const summaryEl = document.querySelector("#homeEquityChartSummary");
+    if (summaryEl) summaryEl.textContent = "暂无持仓品种";
+    drawHomeEquityChartFromCache();
+    return;
+  }
+
+  const cacheHit =
+    cache.status === "ready" &&
+    cache.fingerprint === fingerprint &&
+    cache.bySymbol &&
+    Object.keys(cache.bySymbol).length > 0;
+
+  if (cacheHit) {
+    drawHomeEquityChartFromCache();
+    return;
+  }
+
+  if (cache.status === "loading" && cache.fingerprint === fingerprint && !forceRedraw) {
+    drawHomeEquityChartFromCache();
+    return;
+  }
+
+  state.homeEquityHistory = {
+    ...state.homeEquityHistory,
+    status: "loading",
+    fingerprint,
+    error: null,
+  };
+  drawHomeEquityChartFromCache();
+  const next = await fetchHomeEquityHistories(symbols, fingerprint);
+  if (!next) return;
+  drawHomeEquityChartFromCache();
+}
+
+function renderHomeReturnsPanel() {
+  if (!els.homeReturnsPanel) return;
+  if (!(state.etfs || []).length) {
+    els.homeReturnsPanel.hidden = true;
+    els.homeReturnsPanel.innerHTML = "";
+    return;
+  }
+  const registry = appConfig?.etf?.analysis_registry || appConfig?.etf?.analysis_support || {};
+  const summary = portfolioReturnsByIndex({
+    etfs: state.etfs,
+    quotesBySymbol: state.quotesBySymbol,
+    analysisRegistry: registry,
+    analysisCache: state.analysisCache || {},
+  });
+  const { total, indices } = summary;
+  const period = HOME_EQUITY_PERIODS.some((item) => item.id === state.homeEquityPeriod)
+    ? state.homeEquityPeriod
+    : "month";
+  state.homeEquityPeriod = period;
+  els.homeReturnsPanel.hidden = false;
+  if (!indices.length) {
+    els.homeReturnsPanel.innerHTML = `
+      <section class="panel-block home-returns-block" aria-label="历史收益">
+        <div class="panel-heading">
+          <div>
+            <h3 class="section-title">历史收益</h3>
+            <p class="muted">按指数汇总持仓市值与盈亏；录入份额与含费成本后显示。</p>
+          </div>
+        </div>
+        <p class="muted home-returns-empty">暂无持仓，尚无历史收益。</p>
+        ${homeEquityChartBlockHtml(period)}
+      </section>
+    `;
+    bindHomeEquityPeriodButtons(els.homeReturnsPanel);
+    void refreshHomeEquityChart();
+    return;
+  }
+  const rowsHtml = indices
+    .map((row) => {
+      const etfHint =
+        row.etfs.length > 1
+          ? row.etfs.map((item) => item.name || item.symbol).join(" · ")
+          : row.etfs[0]?.symbol || "";
+      return `<div class="home-returns-row">
+        <div class="home-returns-index">
+          <strong>${escapeHtml(row.indexName)}</strong>
+          ${etfHint ? `<span class="muted">${escapeHtml(etfHint)}</span>` : ""}
+        </div>
+        <div class="num">${row.marketValue != null ? money(row.marketValue) : "—"}</div>
+        <div class="num">${row.costValue != null ? money(row.costValue) : "—"}</div>
+        <div class="num ${pnlToneClass(row.pnl)}">${formatReturnCell(row.pnl, row.pnlPct)}</div>
+      </div>`;
+    })
+    .join("");
+  els.homeReturnsPanel.innerHTML = `
+    <section class="panel-block home-returns-block" aria-label="历史收益">
+      <div class="panel-heading">
+        <div>
+          <h3 class="section-title">历史收益</h3>
+        </div>
+      </div>
+      <div class="home-today-metrics home-returns-metrics" role="list">
+        <div class="pool-alloc-metric" role="listitem"><span>市值</span><strong>${
+          total.marketValue != null ? money(total.marketValue) : "—"
+        }</strong></div>
+        <div class="pool-alloc-metric" role="listitem"><span>成本</span><strong>${
+          total.costValue != null ? money(total.costValue) : "—"
+        }</strong></div>
+        <div class="pool-alloc-metric" role="listitem"><span>盈亏</span><strong class="${pnlToneClass(
+          total.pnl,
+        )}">${total.pnl != null ? money(total.pnl) : "—"}</strong></div>
+        <div class="pool-alloc-metric" role="listitem"><span>收益率</span><strong class="${pnlToneClass(
+          total.pnl,
+        )}">${total.pnlPct != null ? `${signed(total.pnlPct, 1)}%` : "—"}</strong></div>
+      </div>
+      <div class="home-returns-table" aria-label="分指数收益">
+        <div class="home-returns-head"><span>指数</span><span class="num">市值</span><span class="num">成本</span><span class="num">盈亏</span></div>
+        ${rowsHtml}
+      </div>
+      ${homeEquityChartBlockHtml(period)}
+    </section>
+  `;
+  bindHomeEquityPeriodButtons(els.homeReturnsPanel);
+  void refreshHomeEquityChart();
 }
 
 function renderExecDraftPanel({ skipQuoteRefresh = false } = {}) {
@@ -1527,6 +1813,7 @@ function renderPoolAllocation() {
       renderSidebarEtfs();
       syncHomeExecutionDrafts({ persist: true });
       renderHomeTodayCard();
+      renderHomeReturnsPanel();
       renderExecDraftPanel();
     },
   });
@@ -1837,6 +2124,7 @@ export async function renderEtfPool({ refresh = false } = {}) {
   renderMetrics();
   syncHomeExecutionDrafts({ persist: true });
   renderHomeTodayCard();
+  renderHomeReturnsPanel();
   renderExecDraftPanel();
   renderPoolAllocation();
   renderRows();

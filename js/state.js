@@ -84,6 +84,17 @@ export const state = {
   selectedEtf: null,
   priceRange: "1y",
   indexChartRange: "1y",
+  /** 首页收益走势：day | week | month | year */
+  homeEquityPeriod: "month",
+  /** 首页收益走势历史价缓存：{ status, fingerprint, range, bySymbol, error, fetchedAt } */
+  homeEquityHistory: {
+    status: "idle",
+    fingerprint: "",
+    range: "5y",
+    bySymbol: {},
+    error: null,
+    fetchedAt: 0,
+  },
   activeView: "home",
   // 分析页当前 ETF 代码；由侧栏池条目打开
   analysisSymbol: null,
@@ -199,6 +210,7 @@ export function initEls() {
     homeEmptyGuide: document.querySelector("#homeEmptyGuide"),
     homeConfirmSheet: document.querySelector("#homeConfirmSheet"),
     homeTodayCard: document.querySelector("#homeTodayCard"),
+    homeReturnsPanel: document.querySelector("#homeReturnsPanel"),
     etfRows: document.querySelector("#etfRows"),
     etfEmpty: document.querySelector("#etfEmpty"),
     importSeedPool: document.querySelector("#importSeedPool"),
