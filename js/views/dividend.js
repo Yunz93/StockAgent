@@ -23,6 +23,9 @@ import {
   analysisCacheKey,
   fetchAnalysis,
   getCachedAnalysis,
+  isAnalysisFresh,
+  prioritizeAnalysis,
+  refreshAnalysisInBackground,
 } from "../analysis-cache.js";
 import { callRenderer, registerRenderers } from "./render.js";
 import { persistWorkspace } from "../workspace.js";
@@ -148,7 +151,8 @@ async function loadDividend(force = false) {
   const symbol = state.analysisSymbol;
   const key = cacheKey(symbol);
   const cached = getCachedAnalysis(symbol);
-  if (!force && cached != null) {
+  // 可用缓存先返回；lite / 过期由 renderDividend 触发后台补全
+  if (!force && cached != null && !(cached.error || cached.supported === false)) {
     return cached;
   }
   const label = symbol || "分析";
@@ -169,13 +173,26 @@ async function loadDividend(force = false) {
 
 export async function renderDividend({ force = false } = {}) {
   if (!els.dividendContent) return;
+  const symbol = state.analysisSymbol;
   const cached = currentPayload();
-  if (!cached || force) {
-    els.dividendContent.hidden = cached == null;
-    await loadDividend(force);
-  } else {
+  const usable = cached && !(cached.error || cached.supported === false);
+  if (usable && !force) {
     syncAnalysisChrome(cached);
+    paintDividend();
+    // SWR：lite 或缺新鲜全量时后台补拉，完成后若仍停留在该标的则重绘
+    const needsFull = Boolean(cached.lite) || !isAnalysisFresh(cached);
+    if (needsFull) {
+      refreshAnalysisInBackground(symbol, { lite: false })?.then((payload) => {
+        if (!payload || cacheKey(state.analysisSymbol) !== cacheKey(symbol)) return;
+        if (state.activeView !== "dividend") return;
+        syncAnalysisChrome(payload);
+        paintDividend();
+      });
+    }
+    return;
   }
+  els.dividendContent.hidden = cached == null;
+  await loadDividend(force);
   paintDividend();
 }
 
@@ -186,9 +203,10 @@ export async function openAnalysis(symbol = null) {
     symbol = state.etfs.find((item) => item.symbol === preferred)?.symbol || state.etfs[0]?.symbol || null;
   }
   if (!symbol) {
-        callRenderer("switchView", "home");
+    callRenderer("switchView", "home");
     return;
   }
+  prioritizeAnalysis(symbol);
   state.analysisSymbol = symbol;
   state.activeView = "dividend";
   document.querySelectorAll(".nav-item").forEach((button) => button.classList.remove("active"));

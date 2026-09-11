@@ -1,5 +1,7 @@
 """Orchestration and caching for the ETF analysis endpoint."""
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import copy
 import time
 
 from .dividend_analysis import analyze_dividend_data, annualized_tracking_error
@@ -28,6 +30,41 @@ DIVIDEND_CACHE = {}
 def clear_dividend_cache():
     DIVIDEND_CACHE.clear()
 
+_LITE_DROP_KEYS = ("sources", "disclaimer", "note_text", "commentary")
+
+
+def slim_dividend_payload(payload):
+    """预取用瘦身载荷：保留评分/估值/技术面，去掉大图与长文。"""
+    if not isinstance(payload, dict):
+        return payload
+    slim = copy.copy(payload)
+    for key in _LITE_DROP_KEYS:
+        slim.pop(key, None)
+    chart = payload.get("chart")
+    if isinstance(chart, dict):
+        slim_chart = {
+            key: chart.get(key)
+            for key in ("name", "symbol", "price_basis", "available_from", "available_to")
+        }
+        points = chart.get("points") or []
+        if len(points) > 60:
+            step = max(1, len(points) // 60)
+            slim_chart["points"] = points[::step][:60]
+        else:
+            slim_chart["points"] = points
+        slim_chart["markers"] = []
+        slim["chart"] = slim_chart
+    backtest = payload.get("backtest")
+    if isinstance(backtest, dict):
+        slim["backtest"] = {
+            key: backtest.get(key)
+            for key in ("samples", "avg_return_pct", "win_rate_pct", "label")
+            if key in backtest
+        }
+    slim["lite"] = True
+    return slim
+
+
 def missing_danjuan_note(has_daily_pe):
     """蛋卷未收录且兜底估值也失败时的降级说明。"""
     if has_daily_pe:
@@ -50,7 +87,7 @@ def _apply_legulegu_valuation_fallback(settings, errors):
     return valuation
 
 
-def get_dividend_dashboard(refresh=False, symbol=None):
+def get_dividend_dashboard(refresh=False, symbol=None, lite=False):
     """日度决策仪表盘。
 
     symbol 为空时走全局 dividend 设置。
@@ -83,82 +120,130 @@ def get_dividend_dashboard(refresh=False, symbol=None):
     now = time.time()
     cached = DIVIDEND_CACHE.get(cache_key)
     if not refresh and cached and cached.get("payload") and cached.get("expires", 0) > now:
-        return cached["payload"]
+        payload = cached["payload"]
+        return slim_dividend_payload(payload) if lite else payload
 
     errors = {}
     proxy = settings.get("analysis_mode") == "etf_proxy"
     index_source = "腾讯行情"
-    try:
+    index_rows = None
+    etf_history_rows = None
+    valuation = None
+    not_applicable = {}
+    danjuan_code = str(settings.get("danjuan_code") or "").strip()
+    asset_class = settings.get("asset_class")
+    treasury_rows = []
+    fund_profile = None
+
+    def _load_index():
         if proxy:
-            index_rows, index_source = fetch_etf_as_index_history(settings.get("etf_symbol") or requested)
+            return fetch_etf_as_index_history(settings.get("etf_symbol") or requested)
+        return fetch_index_history(
+            settings.get("index_code", "H30269"),
+            preferred_source=settings.get("history_source"),
+            market_symbol=settings.get("history_symbol"),
+        )
+
+    def _load_valuation():
+        local_errors = {}
+        local_na = {}
+        local_valuation = None
+        if danjuan_code:
+            try:
+                local_valuation = fetch_danjuan_valuation(danjuan_code)
+            except Exception as exc:
+                local_errors["valuation"] = f"蛋卷估值不可用，改用指数源 PE：{exc}"
+                local_valuation = _apply_legulegu_valuation_fallback(settings, local_errors)
+        elif proxy and not valuation_framework_applicable(asset_class):
+            local_na["valuation"] = proxy_valuation_note(settings.get("etf_name") or etf_name)
+        elif proxy:
+            local_errors["valuation"] = proxy_valuation_note(settings.get("etf_name") or etf_name)
         else:
-            index_rows, index_source = fetch_index_history(
-                settings.get("index_code", "H30269"),
-                preferred_source=settings.get("history_source"),
-                market_symbol=settings.get("history_symbol"),
-            )
-    except Exception as exc:
+            local_errors["valuation"] = "pending_danjuan_note"
+            local_valuation = _apply_legulegu_valuation_fallback(settings, local_errors)
+        return local_valuation, local_errors, local_na
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = {
+            pool.submit(_load_index): "index",
+            pool.submit(_load_valuation): "valuation",
+            pool.submit(fetch_treasury_yield_history): "treasury",
+            pool.submit(fetch_eastmoney_fund_profile, settings.get("etf_symbol") or requested): "fund_profile",
+        }
+        if not proxy:
+            futures[pool.submit(fetch_etf_as_index_history, settings.get("etf_symbol") or requested)] = "etf_history"
+        if etf_quote is None:
+            futures[pool.submit(fetch_etf_quote, settings.get("etf_symbol", "512890"))] = "etf_quote"
+
+        for future in as_completed(futures):
+            kind = futures[future]
+            try:
+                result = future.result()
+            except Exception as exc:
+                if kind == "index":
+                    return {
+                        "supported": True,
+                        "error": f"{'ETF' if proxy else '指数'}历史数据获取失败：{exc}",
+                        "name": settings.get("index_name") or settings.get("etf_name") or "ETF",
+                        "symbol": settings.get("etf_symbol"),
+                        "analysis_mode": settings.get("analysis_mode") or "index",
+                        "updated_at": as_of(None),
+                    }
+                if kind == "etf_history":
+                    errors["etf_history"] = f"ETF 历史价格暂不可用，走势图临时使用指数点位：{exc}"
+                elif kind == "valuation":
+                    errors["valuation"] = f"估值获取失败：{exc}"
+                elif kind == "treasury":
+                    errors["bond"] = f"国债收益率不可用：{exc}"
+                elif kind == "etf_quote":
+                    errors["etf"] = f"ETF 实时行情不可用：{exc}"
+                elif kind == "fund_profile":
+                    errors["fund_profile"] = f"基金规模与费率暂不可用：{exc}"
+                continue
+
+            if kind == "index":
+                index_rows, index_source = result
+            elif kind == "etf_history":
+                etf_history_rows, _ = result
+            elif kind == "valuation":
+                valuation, val_errors, val_na = result
+                errors.update(val_errors)
+                not_applicable.update(val_na)
+            elif kind == "treasury":
+                treasury_rows = result or []
+            elif kind == "etf_quote":
+                etf_quote = result
+                if etf_quote is not None:
+                    etf_quote["symbol_name"] = (
+                        settings.get("etf_name") or etf_quote.get("name") or settings.get("etf_symbol")
+                    )
+            elif kind == "fund_profile":
+                fund_profile = result
+
+    if index_rows is None:
         return {
             "supported": True,
-            "error": f"{'ETF' if proxy else '指数'}历史数据获取失败：{exc}",
+            "error": f"{'ETF' if proxy else '指数'}历史数据获取失败",
             "name": settings.get("index_name") or settings.get("etf_name") or "ETF",
             "symbol": settings.get("etf_symbol"),
             "analysis_mode": settings.get("analysis_mode") or "index",
             "updated_at": as_of(None),
         }
 
-    etf_history_rows = index_rows if proxy else None
-    if not proxy:
-        try:
-            etf_history_rows, _ = fetch_etf_as_index_history(settings.get("etf_symbol") or requested)
-        except Exception as exc:
-            errors["etf_history"] = f"ETF 历史价格暂不可用，走势图临时使用指数点位：{exc}"
+    if proxy:
+        etf_history_rows = index_rows
 
-    valuation = None
-    not_applicable = {}
-    danjuan_code = str(settings.get("danjuan_code") or "").strip()
-    asset_class = settings.get("asset_class")
-    if danjuan_code:
-        try:
-            valuation = fetch_danjuan_valuation(danjuan_code)
-        except Exception as exc:
-            errors["valuation"] = f"蛋卷估值不可用，改用指数源 PE：{exc}"
-            valuation = _apply_legulegu_valuation_fallback(settings, errors)
-    elif proxy and not valuation_framework_applicable(asset_class):
-        # 黄金/商品、债券：估值框架本身不适用，记入说明而非数据降级。
-        not_applicable["valuation"] = proxy_valuation_note(
-            settings.get("etf_name") or etf_name
-        )
-    elif proxy:
-        errors["valuation"] = proxy_valuation_note(settings.get("etf_name") or etf_name)
-    else:
+    if errors.get("valuation") == "pending_danjuan_note":
         has_daily_pe = any(row.get("pe") is not None for row in index_rows[-30:])
         errors["valuation"] = missing_danjuan_note(has_daily_pe)
-        valuation = _apply_legulegu_valuation_fallback(settings, errors)
 
     if valuation and valuation.get("pe") is not None:
         fill_missing_pe(index_rows, valuation.get("pe"))
 
-    treasury_rows = []
-    try:
-        treasury_rows = fetch_treasury_yield_history()
-    except Exception as exc:
-        errors["bond"] = f"国债收益率不可用：{exc}"
-
-    if etf_quote is None:
-        try:
-            etf_quote = fetch_etf_quote(settings.get("etf_symbol", "512890"))
-            etf_quote["symbol_name"] = settings.get("etf_name") or etf_quote.get("name") or settings.get("etf_symbol")
-        except Exception as exc:
-            errors["etf"] = f"ETF 实时行情不可用：{exc}"
-
     if etf_quote is not None:
         product_quality = dict(etf_quote.get("product_quality") or {})
-        try:
-            profile = fetch_eastmoney_fund_profile(settings.get("etf_symbol") or requested)
-            product_quality.update({key: value for key, value in profile.items() if value is not None})
-        except Exception as exc:
-            errors["fund_profile"] = f"基金规模与费率暂不可用：{exc}"
+        if fund_profile:
+            product_quality.update({key: value for key, value in fund_profile.items() if value is not None})
         if not proxy and etf_history_rows:
             tracking_error = annualized_tracking_error(etf_history_rows, index_rows)
             if tracking_error is not None:
@@ -259,4 +344,4 @@ def get_dividend_dashboard(refresh=False, symbol=None):
 
     ttl = int(settings.get("cache_seconds", 1800))
     DIVIDEND_CACHE[cache_key] = {"payload": payload, "expires": now + ttl}
-    return payload
+    return slim_dividend_payload(payload) if lite else payload

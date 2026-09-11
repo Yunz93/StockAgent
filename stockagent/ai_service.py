@@ -469,6 +469,11 @@ def _cached_quote_price(symbol):
     for entry in QUOTE_MARKET_CACHE.values():
         if not isinstance(entry, dict):
             continue
+        single = entry.get("quote")
+        if isinstance(single, dict):
+            found = _scan([single])
+            if found is not None:
+                return found
         found = _scan((entry.get("payload") or {}).get("quotes"))
         if found is not None:
             return found

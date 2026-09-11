@@ -1,3 +1,4 @@
+import { hydrateAnalysisCacheFromSession } from "./analysis-cache.js";
 import { initEls, setRuntimeInfo } from "./state.js";
 import { loadAppConfig } from "./settings.js";
 import { bindEvents } from "./events.js";
@@ -20,6 +21,7 @@ async function loadRuntimeInfo() {
 }
 
 export async function init() {
+  hydrateAnalysisCacheFromSession();
   initEls();
   initTheme();
   initSidebar();

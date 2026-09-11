@@ -19,8 +19,28 @@ from .market_time import *
 # ETF 批量行情
 # ---------------------------------------------------------------------------
 
+def _quote_symbol_cache_key(symbol):
+    return f"sym:{symbol}"
+
+
+def _store_quote_symbols(quotes, ttl):
+    """按标的写入行情缓存，供批量/单只路径共享。"""
+    now = time.time()
+    for quote in quotes or []:
+        symbol = str((quote or {}).get("symbol") or "").strip()
+        if not symbol:
+            continue
+        QUOTE_MARKET_CACHE[_quote_symbol_cache_key(symbol)] = {
+            "expires": now + ttl,
+            "quote": quote,
+        }
+
+
 def get_etf_quotes(symbols):
-    """按代码列表返回 A 股场内 ETF 行情（带名称）。"""
+    """按代码列表返回 A 股场内 ETF 行情（带名称）。
+
+    缓存按标的拆分：主页批量拉取后，详情单只可直接命中。
+    """
     cleaned = []
     seen = set()
     for raw in symbols or []:
@@ -33,17 +53,54 @@ def get_etf_quotes(symbols):
         return {"quotes": [], "error": "需要至少一个有效的 6 位 ETF 代码", "updated_at": as_of(None)}
 
     now = time.time()
-    cache_key = ",".join(cleaned)
-    cached = QUOTE_MARKET_CACHE.get(cache_key)
-    if cached and cached["expires"] > now:
-        return cached["payload"]
+    quotes_by_symbol = {}
+    missing = []
+    for symbol in cleaned:
+        entry = QUOTE_MARKET_CACHE.get(_quote_symbol_cache_key(symbol))
+        if entry and entry.get("expires", 0) > now and entry.get("quote"):
+            quotes_by_symbol[symbol] = entry["quote"]
+        else:
+            missing.append(symbol)
 
-    stocks = [(symbol, "A", infer_yahoo_symbol(symbol, "A")) for symbol in cleaned]
-    response = fetch_quotes_for_stocks(stocks, "A")
-    response["symbols"] = cleaned
-    ttl = 60 if response.get("quotes") and not response.get("error") else 10
-    QUOTE_MARKET_CACHE[cache_key] = {"expires": now + ttl, "payload": response}
-    return response
+    provider = quote_settings().get("provider_name", "腾讯行情")
+    source_url = "https://gu.qq.com/"
+    error = None
+    if missing:
+        stocks = [(symbol, "A", infer_yahoo_symbol(symbol, "A")) for symbol in missing]
+        response = fetch_quotes_for_stocks(stocks, "A")
+        provider = response.get("provider") or provider
+        source_url = response.get("source_url") or source_url
+        error = response.get("error")
+        ttl = 60 if response.get("quotes") and not response.get("error") else 10
+        _store_quote_symbols(response.get("quotes"), ttl)
+        for quote in response.get("quotes") or []:
+            symbol = str((quote or {}).get("symbol") or "").strip()
+            if symbol:
+                quotes_by_symbol[symbol] = quote
+
+    quotes = [quotes_by_symbol[symbol] for symbol in cleaned if symbol in quotes_by_symbol]
+    payload = {
+        "quotes": quotes,
+        "symbols": cleaned,
+        "provider": provider,
+        "source_url": source_url,
+        "updated_at": as_of(None),
+        "requested": len(cleaned),
+        "returned": len(quotes),
+        "cache_hits": len(cleaned) - len(missing),
+    }
+    if error and not quotes:
+        payload["error"] = error
+    elif error:
+        payload["warning"] = error
+    # 兼容旧的整串 cache key（AI 快照等仍可能按批读取）
+    batch_key = ",".join(cleaned)
+    QUOTE_MARKET_CACHE[batch_key] = {
+        "expires": now + (60 if quotes else 10),
+        "payload": payload,
+    }
+    return payload
+
 
 
 def fetch_quotes_for_stocks(stocks, market=None):
