@@ -2,6 +2,7 @@ import { appConfig, state } from "./state.js";
 import { renderDividend, renderEtfPool } from "./views/render.js";
 import { ensureMarketSentiment } from "./market-sentiment.js";
 import { ensureGoldMacro } from "./gold-macro.js";
+import { refreshStalePoolAnalysis } from "./analysis-cache.js";
 
 export const DEFAULT_AUTO_REFRESH_SECONDS = 300;
 export const MIN_AUTO_REFRESH_SECONDS = 30;
@@ -31,7 +32,9 @@ async function refreshCurrentView() {
     return;
   }
   if (state.activeView === "etf" || state.activeView === "home") {
-    await Promise.all([renderEtfPool({ refresh: true }), sentiment, goldMacro]);
+    // 主页空闲刷新：顺带把过期/lite 分析补成全量
+    const analysis = refreshStalePoolAnalysis().catch(() => {});
+    await Promise.all([renderEtfPool({ refresh: true }), sentiment, goldMacro, analysis]);
     return;
   }
   await Promise.all([sentiment, goldMacro]);

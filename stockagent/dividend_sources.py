@@ -148,11 +148,55 @@ def fetch_tencent_index_history(index_code, start_date="20140101", limit=2000, m
         raise RuntimeError(f"腾讯未返回 {index_code} 可用历史数据")
     return history
 
+def _history_cache_as_index_rows(symbol, start_date="20140101"):
+    """若主页已拉过 5y 历史，复用 HISTORY_CACHE，避免分析路径再打源站。"""
+    from .state import HISTORY_CACHE
+
+    code = _normalize_etf_symbol(symbol)
+    if not code:
+        return None
+    try:
+        start = datetime.datetime.strptime(start_date, "%Y%m%d").date().isoformat()
+    except ValueError:
+        start = "2014-01-01"
+    now = time.time()
+    for range_key in ("5y", "1y"):
+        cached = HISTORY_CACHE.get(f"A:{code}:{range_key}")
+        if not cached or cached.get("expires", 0) <= now:
+            continue
+        points = (cached.get("payload") or {}).get("points") or []
+        rows = []
+        for point in points:
+            date = str((point or {}).get("date") or "")[:10]
+            try:
+                close = float(point.get("close"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if len(date) != 10 or date < start:
+                continue
+            rows.append(
+                {
+                    "date": date,
+                    "close": close,
+                    "high": close,
+                    "low": close,
+                    "change_pct": None,
+                    "pe": None,
+                }
+            )
+        if len(rows) >= 60:
+            return rows, "本地历史缓存"
+    return None
+
+
 def fetch_etf_as_index_history(symbol, start_date="20140101"):
     """用 ETF 自身日 K 充当指数序列（入池兜底分析）。"""
     code = _normalize_etf_symbol(symbol)
     if not code:
         raise RuntimeError("无效 ETF 代码")
+    cached = _history_cache_as_index_rows(code, start_date=start_date)
+    if cached:
+        return cached
     market_symbol = ("sh" if code.startswith(("5", "6", "9")) else "sz") + code
     errors = []
     try:
@@ -497,20 +541,21 @@ def fetch_usd_index_history(limit=320):
 
 
 def fetch_etf_quote(symbol):
-    """跟踪 ETF 实时价（腾讯行情）。沪市 ETF 以 5 开头，深市以 1 开头。"""
-    from .quotes import fetch_tencent_quotes, quote_from_tencent_item
-    from .symbols import field_at
+    """跟踪 ETF 实时价；优先复用 get_etf_quotes 的按标的缓存（主页批量行情）。"""
+    from .quotes import get_etf_quotes
 
     symbol = str(symbol).strip()
-    suffix = ".SS" if symbol.startswith(("5", "6", "9")) else ".SZ"
-    stocks = [(symbol, "A", f"{symbol}{suffix}")]
-    by_tencent = fetch_tencent_quotes(stocks)
-    item = by_tencent.get(("A", symbol))
-    if not item:
-        raise RuntimeError(f"腾讯未返回 {symbol} 行情")
-    quote = quote_from_tencent_item(symbol, "A", f"{symbol}{suffix}", item)
-    quote["name"] = field_at(item, 1) or symbol
-    return quote
+    payload = get_etf_quotes([symbol])
+    quotes = payload.get("quotes") or []
+    for quote in quotes:
+        if str((quote or {}).get("symbol") or "").strip() == symbol:
+            # 分析路径沿用 name 字段
+            if not quote.get("name"):
+                quote = dict(quote)
+                quote["name"] = symbol
+            return quote
+    error = payload.get("error") or payload.get("warning") or "行情不可用"
+    raise RuntimeError(f"未返回 {symbol} 行情：{error}")
 
 
 def fetch_eastmoney_fund_profile(symbol):

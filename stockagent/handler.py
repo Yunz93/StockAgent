@@ -69,7 +69,8 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/dividend/daily":
                 refresh = query.get("refresh", ["0"])[0] in ("1", "true")
                 symbol = query.get("symbol", [""])[0].strip()
-                self.send_json(get_dividend_dashboard(refresh=refresh, symbol=symbol or None))
+                lite = query.get("lite", ["0"])[0] in ("1", "true")
+                self.send_json(get_dividend_dashboard(refresh=refresh, symbol=symbol or None, lite=lite))
                 return
             if parsed.path == "/api/etf/analysis-map":
                 raw = query.get("symbols", [""])[0]

@@ -18,7 +18,7 @@ import {
   isPortfolioAiReady,
   portfolioReviewResultHtml,
 } from "../ai-portfolio.js";
-import { ensurePoolAnalysisPrefetch } from "../analysis-cache.js";
+import { ensurePoolAnalysisPrefetch, prioritizeAnalysis } from "../analysis-cache.js";
 import {
   appendDecisionHistory,
   executionDraftSummary,
@@ -761,7 +761,9 @@ function renderRows() {
     });
   });
   els.etfRows.querySelectorAll("[data-analyze]").forEach((button) => {
-    button.addEventListener("click", () => openAnalysis(button.dataset.analyze));
+    const symbol = button.dataset.analyze;
+    button.addEventListener("click", () => openAnalysis(symbol));
+    button.addEventListener("pointerenter", () => prioritizeAnalysis(symbol), { passive: true });
   });
   bindDragReorder(els.etfRows, {
     itemSelector: "tr[data-symbol]",
@@ -1904,7 +1906,9 @@ export function renderBuys() {
     .join("");
 
   els.buyRows.querySelectorAll("[data-analyze]").forEach((button) => {
-    button.addEventListener("click", () => openAnalysis(button.dataset.analyze));
+    const symbol = button.dataset.analyze;
+    button.addEventListener("click", () => openAnalysis(symbol));
+    button.addEventListener("pointerenter", () => prioritizeAnalysis(symbol), { passive: true });
   });
   els.buyRows.querySelectorAll("[data-edit-trade]").forEach((button) => {
     button.addEventListener("click", () => startBuyEdit(button.dataset.tradeType, button.dataset.editTrade));
@@ -2183,7 +2187,10 @@ export function renderSidebarEtfs() {
     .join("");
 
   els.sidebarEtfList.querySelectorAll("[data-analyze]").forEach((button) => {
-    button.addEventListener("click", () => openAnalysis(button.dataset.analyze));
+    const symbol = button.dataset.analyze;
+    button.addEventListener("click", () => openAnalysis(symbol));
+    button.addEventListener("pointerenter", () => prioritizeAnalysis(symbol), { passive: true });
+    button.addEventListener("focus", () => prioritizeAnalysis(symbol));
   });
   bindDragReorder(els.sidebarEtfList, {
     itemSelector: ".sidebar-etf-item[data-symbol]",
